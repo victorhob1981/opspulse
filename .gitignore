@@ -215,3 +215,8 @@ node_modules/
 dist/
 .build/
 .vercel/
+api/local.settings.json
+api/.python_packages/
+api/.venv/
+api/.azurite/
+.venv/
