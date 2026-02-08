@@ -131,3 +131,25 @@ class SupabaseAdmin:
         )
         if r.status_code not in (200, 204):
             raise RuntimeError(f"Failed updating routine last_run_at: {r.status_code} {r.text[:200]}")
+
+    def update_routine(self, workspace_id: str, routine_id: str, changes: dict) -> dict:
+        r = self._req(
+            "PATCH",
+            "/rest/v1/routines",
+            params={"id": f"eq.{routine_id}", "workspace_id": f"eq.{workspace_id}", "select": "*"},
+            json=changes,
+            extra_headers={"Prefer": "return=representation"},
+        )
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"Failed updating routine: {r.status_code} {r.text[:200]}")
+        rows = r.json()
+        return rows[0] if rows else None
+
+    def delete_routine(self, workspace_id: str, routine_id: str) -> None:
+        r = self._req(
+            "DELETE",
+            "/rest/v1/routines",
+            params={"id": f"eq.{routine_id}", "workspace_id": f"eq.{workspace_id}"},
+        )
+        if r.status_code not in (200, 204):
+            raise RuntimeError(f"Failed deleting routine: {r.status_code} {r.text[:200]}")

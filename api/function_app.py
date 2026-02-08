@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 import azure.functions as func
 import httpx
 from pydantic import ValidationError
-
+from src.schemas import RoutineUpdate
 from src.auth import get_user_id_from_request
 from src.schemas import RoutineCreate
 from src.security import validate_headers
@@ -303,5 +303,81 @@ def list_runs(req: func.HttpRequest) -> func.HttpResponse:
 
     except ValueError:
         return _json(400, {"error": {"code": "BAD_REQUEST", "message": "limit must be an integer"}})
+    except Exception as e:
+        return _json(500, {"error": {"code": "INTERNAL", "message": str(e)[:200]}})
+
+@app.route(route="routines/{routine_id}", methods=["PATCH"])
+def patch_routine(req: func.HttpRequest) -> func.HttpResponse:
+    user_id = get_user_id_from_request(req.headers.get("Authorization"))
+    if not user_id:
+        return _json(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}})
+
+    routine_id = req.route_params.get("routine_id")
+    if not routine_id:
+        return _json(400, {"error": {"code": "BAD_REQUEST", "message": "Missing routine_id"}})
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return _json(400, {"error": {"code": "BAD_REQUEST", "message": "Invalid JSON body"}})
+
+    try:
+        data = RoutineUpdate.model_validate(body)
+
+        changes = data.model_dump(exclude_unset=True, exclude_none=True)
+
+        if "headers_json" in changes:
+            validate_headers(changes["headers_json"])
+
+        if changes.get("auth_mode") == "SECRET_REF" and not changes.get("secret_ref"):
+            return _json(400, {"error": {"code": "BAD_REQUEST", "message": "secret_ref is required when auth_mode=SECRET_REF"}})
+
+        if "interval_minutes" in changes:
+            next_run = datetime.now(timezone.utc) + timedelta(minutes=int(changes["interval_minutes"]))
+            changes["next_run_at"] = next_run.isoformat()
+
+        changes["updated_at"] = _now_iso()
+
+        admin = SupabaseAdmin()
+        workspace_id = admin.get_or_create_workspace_id(user_id)
+
+        existing = admin.get_routine(workspace_id, routine_id)
+        if not existing:
+            return _json(404, {"error": {"code": "NOT_FOUND", "message": "Routine not found"}})
+
+        updated = admin.update_routine(workspace_id, routine_id, changes)
+        return _json(200, {"routine": updated})
+
+    except ValidationError as ve:
+        return _json(400, {"error": {"code": "VALIDATION_ERROR", "details": ve.errors()}})
+    except ValueError as ve:
+        return _json(400, {"error": {"code": "BAD_REQUEST", "message": str(ve)}})
+    except Exception as e:
+        return _json(500, {"error": {"code": "INTERNAL", "message": str(e)[:200]}})
+
+@app.route(route="routines/{routine_id}", methods=["DELETE"])
+def delete_routine(req: func.HttpRequest) -> func.HttpResponse:
+    user_id = get_user_id_from_request(req.headers.get("Authorization"))
+    if not user_id:
+        return _json(
+            401,
+            {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}},
+        )
+
+    routine_id = req.route_params.get("routine_id")
+    if not routine_id:
+        return _json(400, {"error": {"code": "BAD_REQUEST", "message": "Missing routine_id"}})
+
+    try:
+        admin = SupabaseAdmin()
+        workspace_id = admin.get_or_create_workspace_id(user_id)
+
+        existing = admin.get_routine(workspace_id, routine_id)
+        if not existing:
+            return _json(404, {"error": {"code": "NOT_FOUND", "message": "Routine not found"}})
+
+        admin.delete_routine(workspace_id, routine_id)
+        return _json(200, {"deleted": True, "id": routine_id})
+
     except Exception as e:
         return _json(500, {"error": {"code": "INTERNAL", "message": str(e)[:200]}})
