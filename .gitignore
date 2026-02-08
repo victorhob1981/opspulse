@@ -220,3 +220,4 @@ api/.python_packages/
 api/.venv/
 api/.azurite/
 .venv/
+tools/node_modules/
