@@ -221,3 +221,4 @@ api/.venv/
 api/.azurite/
 .venv/
 tools/node_modules/
+tools/env.local.sh

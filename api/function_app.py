@@ -281,7 +281,11 @@ def patch_routine(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
         data = RoutineUpdate.model_validate(body)
-        changes = data.model_dump(exclude_unset=True, exclude_none=True)
+        changes = data.model_dump(mode="json", exclude_unset=True, exclude_none=True)
+        if "endpoint_url" in changes:
+            changes["endpoint_url"] = str(changes["endpoint_url"])
+
+
 
         if "headers_json" in changes:
             validate_headers(changes["headers_json"])
@@ -441,7 +445,7 @@ def _run_one_scheduled(routine: dict, locked_by: str) -> dict:
         try:
             run_payload = {
                 "routine_id": routine["id"],
-                "triggered_by": "SCHEDULED",
+                "triggered_by": "SCHEDULE",
                 "status": result["status"],
                 "http_status": result["http_status"],
                 "duration_ms": result["duration_ms"],
@@ -450,9 +454,9 @@ def _run_one_scheduled(routine: dict, locked_by: str) -> dict:
                 "finished_at": finished_at,
             }
             local_admin.insert_run(run_payload)
-        except Exception:
-            # não trava o scheduler por falha de log histórico
-            pass
+        except Exception as e:
+            print(f"[scheduler] insert_run failed routine={routine['id']} err={_truncate(str(e), 200)}")
+
 
         # finaliza e solta lock (isso é o principal)
         local_admin.finish_scheduled_run(
