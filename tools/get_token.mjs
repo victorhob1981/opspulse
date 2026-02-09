@@ -1,0 +1,21 @@
+import { createClient } from '@supabase/supabase-js'
+
+const url = process.env.SUPABASE_URL
+const anon = process.env.SUPABASE_ANON_KEY
+const email = process.env.EMAIL
+const password = process.env.PASSWORD
+
+if (!url || !anon || !email || !password) {
+  console.error("Missing env vars: SUPABASE_URL, SUPABASE_ANON_KEY, EMAIL, PASSWORD")
+  process.exit(1)
+}
+
+const supabase = createClient(url, anon, { auth: { persistSession: false } })
+const { data, error } = await supabase.auth.signInWithPassword({ email, password }) // :contentReference[oaicite:4]{index=4}
+
+if (error) {
+  console.error(error)
+  process.exit(1)
+}
+
+console.log(data.session?.access_token ?? "")

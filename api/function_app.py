@@ -1,20 +1,25 @@
 import json
 import os
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 
 import azure.functions as func
 import httpx
 from pydantic import ValidationError
-from src.schemas import RoutineUpdate
+
 from src.auth import get_user_id_from_request
-from src.schemas import RoutineCreate
+from src.schemas import RoutineCreate, RoutineUpdate
 from src.security import validate_headers
 from src.supabase_admin import SupabaseAdmin
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 
+# -------------------------
+# Helpers básicos
+# -------------------------
 def _json(status: int, payload: dict) -> func.HttpResponse:
     return func.HttpResponse(
         body=json.dumps(payload, ensure_ascii=False),
@@ -25,7 +30,7 @@ def _json(status: int, payload: dict) -> func.HttpResponse:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _truncate(s: str | None, max_len: int = 180) -> str | None:
@@ -44,10 +49,7 @@ def _ping_supabase() -> dict:
         return {"ok": False, "reason": "missing_env"}
 
     url = f"{supabase_url.rstrip('/')}/rest/v1/workspaces?select=id&limit=1"
-    headers = {
-        "apikey": service_key,
-        "Authorization": f"Bearer {service_key}",
-    }
+    headers = {"apikey": service_key, "Authorization": f"Bearer {service_key}"}
 
     try:
         t0 = time.time()
@@ -59,31 +61,123 @@ def _ping_supabase() -> dict:
             "latency_ms": elapsed_ms,
         }
     except Exception as e:
-        return {"ok": False, "error": str(e)[:200]}
+        return {"ok": False, "error": _truncate(str(e), 200)}
 
 
+def _get_secret_value(secret_ref: str | None) -> str | None:
+    """
+    Estratégia simples e segura:
+    - Se secret_ref="GITHUB_TOKEN", busca env var "SECRET_GITHUB_TOKEN"
+    - Se secret_ref já vier "SECRET_GITHUB_TOKEN", usa direto.
+    """
+    if not secret_ref:
+        return None
+
+    env_name = secret_ref if secret_ref.startswith("SECRET_") else f"SECRET_{secret_ref}"
+    return os.environ.get(env_name)
+
+
+def _execute_http_routine(routine: dict) -> dict:
+    """
+    Executa uma rotina do tipo HTTP_CHECK.
+    Retorna sempre um dict com status/tempo/erro (não lança exception por HTTP != 2xx).
+    """
+    timeout_s = float(os.environ.get("ROUTINE_TIMEOUT_SECONDS", "8"))
+    started = _now_iso()
+    t0 = time.time()
+
+    try:
+        method = (routine.get("http_method") or "GET").upper()
+        url = routine.get("endpoint_url") or ""
+        headers = routine.get("headers_json") or {}
+
+        # Auth por secret_ref (NÃO salva token no banco)
+        auth_mode = routine.get("auth_mode") or "NONE"
+        if auth_mode == "SECRET_REF":
+            token = _get_secret_value(routine.get("secret_ref"))
+            if not token:
+                finished = _now_iso()
+                return {
+                    "status": "FAIL",
+                    "http_status": None,
+                    "duration_ms": int((time.time() - t0) * 1000),
+                    "error_message": "missing_secret_ref_value",
+                    "started_at": started,
+                    "finished_at": finished,
+                }
+            # padrão simples: Bearer token
+            headers = dict(headers)
+            headers["Authorization"] = f"Bearer {token}"
+
+        # request
+        r = httpx.request(method, url, headers=headers, timeout=timeout_s)
+
+        finished = _now_iso()
+        duration_ms = int((time.time() - t0) * 1000)
+
+        ok = 200 <= r.status_code < 300
+        if ok:
+            return {
+                "status": "SUCCESS",
+                "http_status": r.status_code,
+                "duration_ms": duration_ms,
+                "error_message": None,
+                "started_at": started,
+                "finished_at": finished,
+            }
+
+        # Falha HTTP: guarda só um resumo curto (sem payload sensível)
+        return {
+            "status": "FAIL",
+            "http_status": r.status_code,
+            "duration_ms": duration_ms,
+            "error_message": _truncate(f"http_error:{r.status_code}", 180),
+            "started_at": started,
+            "finished_at": finished,
+        }
+
+    except httpx.TimeoutException:
+        finished = _now_iso()
+        return {
+            "status": "FAIL",
+            "http_status": None,
+            "duration_ms": int((time.time() - t0) * 1000),
+            "error_message": "timeout",
+            "started_at": started,
+            "finished_at": finished,
+        }
+    except Exception as e:
+        finished = _now_iso()
+        return {
+            "status": "FAIL",
+            "http_status": None,
+            "duration_ms": int((time.time() - t0) * 1000),
+            "error_message": _truncate(f"exception:{str(e)}", 180),
+            "started_at": started,
+            "finished_at": finished,
+        }
+
+
+# -------------------------
+# HTTP endpoints
+# -------------------------
 @app.route(route="health", methods=["GET"])
 def health(req: func.HttpRequest) -> func.HttpResponse:
-    payload = {
-        "status": "ok",
-        "service": "opspulse-api",
-        "supabase": _ping_supabase(),
-    }
-    return _json(200, payload)
+    return _json(
+        200,
+        {
+            "status": "ok",
+            "service": "opspulse-api",
+            "supabase": _ping_supabase(),
+        },
+    )
 
 
 @app.route(route="routines", methods=["POST"])
 def create_routine(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Cria uma rotina vinculada ao usuário autenticado (token do Supabase).
-    O backend valida o token e cria/obtém um workspace do usuário.
-    """
     user_id = get_user_id_from_request(req.headers.get("Authorization"))
     if not user_id:
-        return _json(
-            401,
-            {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}},
-        )
+        return _json(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}})
 
     try:
         body = req.get_json()
@@ -121,44 +215,36 @@ def create_routine(req: func.HttpRequest) -> func.HttpResponse:
     except ValueError as ve:
         return _json(400, {"error": {"code": "BAD_REQUEST", "message": str(ve)}})
     except Exception as e:
-        return _json(500, {"error": {"code": "INTERNAL", "message": str(e)[:200]}})
+        return _json(500, {"error": {"code": "INTERNAL", "message": _truncate(str(e), 200)}})
 
 
 @app.route(route="routines", methods=["GET"])
 def list_routines(req: func.HttpRequest) -> func.HttpResponse:
     user_id = get_user_id_from_request(req.headers.get("Authorization"))
     if not user_id:
-        return _json(
-            401,
-            {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}},
-        )
+        return _json(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}})
 
     try:
-        limit_raw = req.params.get("limit", "50")
-        limit = int(limit_raw)
+        limit = int(req.params.get("limit", "50"))
         if limit < 1 or limit > 200:
             return _json(400, {"error": {"code": "BAD_REQUEST", "message": "limit must be between 1 and 200"}})
 
         admin = SupabaseAdmin()
         workspace_id = admin.get_or_create_workspace_id(user_id)
         routines = admin.list_routines(workspace_id, limit=limit)
-
         return _json(200, {"routines": routines})
 
     except ValueError:
         return _json(400, {"error": {"code": "BAD_REQUEST", "message": "limit must be an integer"}})
     except Exception as e:
-        return _json(500, {"error": {"code": "INTERNAL", "message": str(e)[:200]}})
+        return _json(500, {"error": {"code": "INTERNAL", "message": _truncate(str(e), 200)}})
 
 
 @app.route(route="routines/{routine_id}", methods=["GET"])
 def get_routine(req: func.HttpRequest) -> func.HttpResponse:
     user_id = get_user_id_from_request(req.headers.get("Authorization"))
     if not user_id:
-        return _json(
-            401,
-            {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}},
-        )
+        return _json(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}})
 
     routine_id = req.route_params.get("routine_id")
     if not routine_id:
@@ -175,112 +261,134 @@ def get_routine(req: func.HttpRequest) -> func.HttpResponse:
         return _json(200, {"routine": routine})
 
     except Exception as e:
-        return _json(500, {"error": {"code": "INTERNAL", "message": str(e)[:200]}})
+        return _json(500, {"error": {"code": "INTERNAL", "message": _truncate(str(e), 200)}})
+
+
+@app.route(route="routines/{routine_id}", methods=["PATCH"])
+def patch_routine(req: func.HttpRequest) -> func.HttpResponse:
+    user_id = get_user_id_from_request(req.headers.get("Authorization"))
+    if not user_id:
+        return _json(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}})
+
+    routine_id = req.route_params.get("routine_id")
+    if not routine_id:
+        return _json(400, {"error": {"code": "BAD_REQUEST", "message": "Missing routine_id"}})
+
+    try:
+        body = req.get_json()
+    except Exception:
+        return _json(400, {"error": {"code": "BAD_REQUEST", "message": "Invalid JSON body"}})
+
+    try:
+        data = RoutineUpdate.model_validate(body)
+        changes = data.model_dump(exclude_unset=True, exclude_none=True)
+
+        if "headers_json" in changes:
+            validate_headers(changes["headers_json"])
+
+        if changes.get("auth_mode") == "SECRET_REF" and not changes.get("secret_ref"):
+            return _json(400, {"error": {"code": "BAD_REQUEST", "message": "secret_ref is required when auth_mode=SECRET_REF"}})
+
+        # Se mudar intervalo, recalcula next_run_at (simples e OK pro MVP)
+        if "interval_minutes" in changes:
+            next_run = datetime.now(timezone.utc) + timedelta(minutes=int(changes["interval_minutes"]))
+            changes["next_run_at"] = next_run.isoformat()
+
+        changes["updated_at"] = _now_iso()
+
+        admin = SupabaseAdmin()
+        workspace_id = admin.get_or_create_workspace_id(user_id)
+
+        existing = admin.get_routine(workspace_id, routine_id)
+        if not existing:
+            return _json(404, {"error": {"code": "NOT_FOUND", "message": "Routine not found"}})
+
+        updated = admin.update_routine(workspace_id, routine_id, changes)
+        return _json(200, {"routine": updated})
+
+    except ValidationError as ve:
+        return _json(400, {"error": {"code": "VALIDATION_ERROR", "details": ve.errors()}})
+    except ValueError as ve:
+        return _json(400, {"error": {"code": "BAD_REQUEST", "message": str(ve)}})
+    except Exception as e:
+        return _json(500, {"error": {"code": "INTERNAL", "message": _truncate(str(e), 200)}})
+
+
+@app.route(route="routines/{routine_id}", methods=["DELETE"])
+def delete_routine(req: func.HttpRequest) -> func.HttpResponse:
+    user_id = get_user_id_from_request(req.headers.get("Authorization"))
+    if not user_id:
+        return _json(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}})
+
+    routine_id = req.route_params.get("routine_id")
+    if not routine_id:
+        return _json(400, {"error": {"code": "BAD_REQUEST", "message": "Missing routine_id"}})
+
+    try:
+        admin = SupabaseAdmin()
+        workspace_id = admin.get_or_create_workspace_id(user_id)
+
+        existing = admin.get_routine(workspace_id, routine_id)
+        if not existing:
+            return _json(404, {"error": {"code": "NOT_FOUND", "message": "Routine not found"}})
+
+        admin.delete_routine(workspace_id, routine_id)
+        return _json(200, {"deleted": True, "id": routine_id})
+
+    except Exception as e:
+        return _json(500, {"error": {"code": "INTERNAL", "message": _truncate(str(e), 200)}})
 
 
 @app.route(route="routines/{routine_id}/run", methods=["POST"])
 def run_routine(req: func.HttpRequest) -> func.HttpResponse:
     user_id = get_user_id_from_request(req.headers.get("Authorization"))
     if not user_id:
-        return _json(
-            401,
-            {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}},
-        )
+        return _json(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}})
 
     routine_id = req.route_params.get("routine_id")
     if not routine_id:
         return _json(400, {"error": {"code": "BAD_REQUEST", "message": "Missing routine_id"}})
 
-    admin = SupabaseAdmin()
-    workspace_id = admin.get_or_create_workspace_id(user_id)
-
-    routine = admin.get_routine(workspace_id, routine_id)
-    if not routine:
-        return _json(404, {"error": {"code": "NOT_FOUND", "message": "Routine not found"}})
-
-    timeout_s = int(os.environ.get("HTTP_TIMEOUT_SECONDS", "10"))
-    started_at = _now_iso()
-    t0 = time.time()
-
-    headers = dict(routine.get("headers_json") or {})
-    auth_mode = routine.get("auth_mode") or "NONE"
-    secret_ref = routine.get("secret_ref")
-
-    if auth_mode == "SECRET_REF":
-        if not secret_ref:
-            return _json(
-                400,
-                {"error": {"code": "BAD_REQUEST", "message": "secret_ref is required for SECRET_REF"}},
-            )
-        secret_val = os.environ.get(f"SECRET_{secret_ref}")
-        if not secret_val:
-            return _json(
-                500,
-                {"error": {"code": "INTERNAL", "message": f"Missing app setting SECRET_{secret_ref}"}},
-            )
-        headers["Authorization"] = f"Bearer {secret_val}"
-
-    method = (routine.get("http_method") or "GET").upper()
-    url = routine.get("endpoint_url")
-
-    http_status = None
-    error_message = None
-    status = "FAIL"
-
-    def do_request():
-        return httpx.request(method, url, headers=headers, timeout=timeout_s)
-
     try:
-        r = do_request()
-        http_status = r.status_code
+        admin = SupabaseAdmin()
+        workspace_id = admin.get_or_create_workspace_id(user_id)
 
-        if http_status in (429, 502, 503, 504):
-            time.sleep(0.5)
-            r = do_request()
-            http_status = r.status_code
+        routine = admin.get_routine(workspace_id, routine_id)
+        if not routine:
+            return _json(404, {"error": {"code": "NOT_FOUND", "message": "Routine not found"}})
 
-        if 200 <= http_status < 400:
-            status = "SUCCESS"
-        else:
-            status = "FAIL"
-            error_message = _truncate(f"HTTP {http_status}")
+        result = _execute_http_routine(routine)
+
+        run_payload = {
+            "routine_id": routine_id,
+            "triggered_by": "MANUAL",
+            "status": result["status"],
+            "http_status": result["http_status"],
+            "duration_ms": result["duration_ms"],
+            "error_message": result["error_message"],
+            "started_at": result["started_at"],
+            "finished_at": result["finished_at"],
+        }
+
+        created_run = admin.insert_run(run_payload)
+
+        # best-effort: atualizar last_run_at
+        try:
+            admin.touch_last_run(workspace_id, routine_id, result["finished_at"])
+        except Exception:
+            pass
+
+        return _json(200, {"run": created_run, "routine": {"id": routine_id, "last_run_at": result["finished_at"]}})
 
     except Exception as e:
-        status = "FAIL"
-        error_message = _truncate(str(e))
-
-    duration_ms = int((time.time() - t0) * 1000)
-    finished_at = _now_iso()
-
-    run_payload = {
-        "routine_id": routine_id,
-        "triggered_by": "MANUAL",
-        "status": status,
-        "http_status": http_status,
-        "duration_ms": duration_ms,
-        "error_message": error_message,
-        "started_at": started_at,
-        "finished_at": finished_at,
-    }
-
-    created_run = admin.insert_run(run_payload)
-
-    try:
-        admin.touch_last_run(workspace_id, routine_id, finished_at)
-    except Exception:
-        pass
-
-    return _json(200, {"run": created_run, "routine": {"id": routine_id, "last_run_at": finished_at}})
+        return _json(500, {"error": {"code": "INTERNAL", "message": _truncate(str(e), 200)}})
 
 
 @app.route(route="routines/{routine_id}/runs", methods=["GET"])
 def list_runs(req: func.HttpRequest) -> func.HttpResponse:
     user_id = get_user_id_from_request(req.headers.get("Authorization"))
     if not user_id:
-        return _json(
-            401,
-            {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}},
-        )
+        return _json(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}})
 
     routine_id = req.route_params.get("routine_id")
     if not routine_id:
@@ -304,80 +412,138 @@ def list_runs(req: func.HttpRequest) -> func.HttpResponse:
     except ValueError:
         return _json(400, {"error": {"code": "BAD_REQUEST", "message": "limit must be an integer"}})
     except Exception as e:
-        return _json(500, {"error": {"code": "INTERNAL", "message": str(e)[:200]}})
+        return _json(500, {"error": {"code": "INTERNAL", "message": _truncate(str(e), 200)}})
 
-@app.route(route="routines/{routine_id}", methods=["PATCH"])
-def patch_routine(req: func.HttpRequest) -> func.HttpResponse:
-    user_id = get_user_id_from_request(req.headers.get("Authorization"))
-    if not user_id:
-        return _json(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}})
 
-    routine_id = req.route_params.get("routine_id")
-    if not routine_id:
-        return _json(400, {"error": {"code": "BAD_REQUEST", "message": "Missing routine_id"}})
+# -------------------------
+# Scheduler (Timer Trigger)
+# -------------------------
+def _run_one_scheduled(routine: dict, locked_by: str) -> dict:
+    """
+    Executa uma rotina já LOCKADA.
+    - Sempre tenta finalizar (soltar lock + next_run_at) quando tiver timestamps.
+    - Nunca deixa lock pendurado: fallback release_lock no finally (se existir).
+    """
+    local_admin = SupabaseAdmin()
+    result = None
+    finished_at = None
 
     try:
-        body = req.get_json()
-    except Exception:
-        return _json(400, {"error": {"code": "BAD_REQUEST", "message": "Invalid JSON body"}})
+        # executa (não levanta exception em falha HTTP; retorna FAIL)
+        result = _execute_http_routine(routine)
+        finished_at = result.get("finished_at") or _now_iso()
 
-    try:
-        data = RoutineUpdate.model_validate(body)
+        # calcula next_run_at (MVP simples: finished + interval)
+        finished_dt = datetime.fromisoformat(finished_at)
+        next_run = (finished_dt + timedelta(minutes=int(routine["interval_minutes"]))).isoformat()
 
-        changes = data.model_dump(exclude_unset=True, exclude_none=True)
+        # grava run (best-effort)
+        try:
+            run_payload = {
+                "routine_id": routine["id"],
+                "triggered_by": "SCHEDULED",
+                "status": result["status"],
+                "http_status": result["http_status"],
+                "duration_ms": result["duration_ms"],
+                "error_message": result["error_message"],
+                "started_at": result["started_at"],
+                "finished_at": finished_at,
+            }
+            local_admin.insert_run(run_payload)
+        except Exception:
+            # não trava o scheduler por falha de log histórico
+            pass
 
-        if "headers_json" in changes:
-            validate_headers(changes["headers_json"])
-
-        if changes.get("auth_mode") == "SECRET_REF" and not changes.get("secret_ref"):
-            return _json(400, {"error": {"code": "BAD_REQUEST", "message": "secret_ref is required when auth_mode=SECRET_REF"}})
-
-        if "interval_minutes" in changes:
-            next_run = datetime.now(timezone.utc) + timedelta(minutes=int(changes["interval_minutes"]))
-            changes["next_run_at"] = next_run.isoformat()
-
-        changes["updated_at"] = _now_iso()
-
-        admin = SupabaseAdmin()
-        workspace_id = admin.get_or_create_workspace_id(user_id)
-
-        existing = admin.get_routine(workspace_id, routine_id)
-        if not existing:
-            return _json(404, {"error": {"code": "NOT_FOUND", "message": "Routine not found"}})
-
-        updated = admin.update_routine(workspace_id, routine_id, changes)
-        return _json(200, {"routine": updated})
-
-    except ValidationError as ve:
-        return _json(400, {"error": {"code": "VALIDATION_ERROR", "details": ve.errors()}})
-    except ValueError as ve:
-        return _json(400, {"error": {"code": "BAD_REQUEST", "message": str(ve)}})
-    except Exception as e:
-        return _json(500, {"error": {"code": "INTERNAL", "message": str(e)[:200]}})
-
-@app.route(route="routines/{routine_id}", methods=["DELETE"])
-def delete_routine(req: func.HttpRequest) -> func.HttpResponse:
-    user_id = get_user_id_from_request(req.headers.get("Authorization"))
-    if not user_id:
-        return _json(
-            401,
-            {"error": {"code": "UNAUTHORIZED", "message": "Missing/invalid Authorization Bearer token"}},
+        # finaliza e solta lock (isso é o principal)
+        local_admin.finish_scheduled_run(
+            workspace_id=routine["workspace_id"],
+            routine_id=routine["id"],
+            locked_by=locked_by,
+            last_run_at=finished_at,
+            next_run_at=next_run,
         )
 
-    routine_id = req.route_params.get("routine_id")
-    if not routine_id:
-        return _json(400, {"error": {"code": "BAD_REQUEST", "message": "Missing routine_id"}})
-
-    try:
-        admin = SupabaseAdmin()
-        workspace_id = admin.get_or_create_workspace_id(user_id)
-
-        existing = admin.get_routine(workspace_id, routine_id)
-        if not existing:
-            return _json(404, {"error": {"code": "NOT_FOUND", "message": "Routine not found"}})
-
-        admin.delete_routine(workspace_id, routine_id)
-        return _json(200, {"deleted": True, "id": routine_id})
+        return {"id": routine["id"], "status": result["status"], "http_status": result["http_status"]}
 
     except Exception as e:
-        return _json(500, {"error": {"code": "INTERNAL", "message": str(e)[:200]}})
+        # tenta registrar FAIL (best-effort)
+        try:
+            now_iso = _now_iso()
+            local_admin.insert_run(
+                {
+                    "routine_id": routine["id"],
+                    "triggered_by": "SCHEDULED",
+                    "status": "FAIL",
+                    "http_status": None,
+                    "duration_ms": 0,
+                    "error_message": _truncate(f"scheduler_error:{str(e)}"),
+                    "started_at": now_iso,
+                    "finished_at": now_iso,
+                }
+            )
+        except Exception:
+            pass
+
+        # re-raise pra aparecer no log do worker
+        raise
+
+    finally:
+        # fallback: se por algum motivo o finish falhou, tenta liberar lock aqui.
+        # (Só funciona se você implementou SupabaseAdmin.release_lock)
+        try:
+            if hasattr(local_admin, "release_lock"):
+                local_admin.release_lock(
+                    workspace_id=routine["workspace_id"],
+                    routine_id=routine["id"],
+                    locked_by=locked_by,
+                )
+        except Exception:
+            pass
+
+
+@app.schedule(schedule="0 */1 * * * *", arg_name="mytimer", run_on_startup=True, use_monitor=True)
+def scheduler(mytimer: func.TimerRequest) -> None:
+    now_iso = _now_iso()
+    lease_seconds = int(os.environ.get("LOCK_LEASE_SECONDS", "45"))
+    batch_limit = int(os.environ.get("SCHEDULER_BATCH_LIMIT", "20"))
+    max_concurrency = int(os.environ.get("MAX_CONCURRENCY", "5"))
+
+    locked_by = os.environ.get("WEBSITE_INSTANCE_ID") or f"local-{uuid.uuid4().hex[:8]}"
+
+    admin = SupabaseAdmin()
+
+    try:
+        candidates = admin.list_due_routines(now_iso, limit=batch_limit)
+        if not candidates:
+            print(f"[scheduler] no due routines at {now_iso}")
+            return
+
+        locked = []
+        for r in candidates:
+            got = admin.try_lock_routine(
+                workspace_id=r["workspace_id"],
+                routine_id=r["id"],
+                now_iso=now_iso,
+                lease_seconds=lease_seconds,
+                locked_by=locked_by,
+            )
+            if got:
+                locked.append(got)
+
+        if not locked:
+            print(f"[scheduler] candidates found but none locked (lock active / race) at {now_iso}")
+            return
+
+        print(f"[scheduler] locked {len(locked)} routines (batch_limit={batch_limit}, max_concurrency={max_concurrency})")
+
+        with ThreadPoolExecutor(max_workers=max_concurrency) as ex:
+            futures = [ex.submit(_run_one_scheduled, r, locked_by) for r in locked]
+            for f in as_completed(futures):
+                try:
+                    out = f.result()
+                    print(f"[scheduler] done routine={out['id']} status={out['status']} http={out['http_status']}")
+                except Exception as e:
+                    print(f"[scheduler] worker error: {_truncate(str(e), 200)}")
+
+    except Exception as e:
+        print(f"[scheduler] fatal error: {_truncate(str(e), 200)}")
