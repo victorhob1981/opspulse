@@ -505,7 +505,7 @@ def _run_one_scheduled(routine: dict, locked_by: str) -> dict:
             pass
 
 
-@app.schedule(schedule="0 */1 * * * *", arg_name="mytimer", run_on_startup=True, use_monitor=True)
+@app.schedule(schedule="0 */4 * * * *", arg_name="mytimer", run_on_startup=True, use_monitor=True)
 def scheduler(mytimer: func.TimerRequest) -> None:
     now_iso = _now_iso()
     lease_seconds = int(os.environ.get("LOCK_LEASE_SECONDS", "45"))
