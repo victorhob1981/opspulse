@@ -2,6 +2,29 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
 type Routine = {
   id: string;
   name: string;
@@ -11,6 +34,15 @@ type Routine = {
   headers_json: Record<string, any>;
   is_active: boolean;
 };
+
+function isValidUrl(url: string) {
+  try {
+    new URL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export default function RoutineEdit() {
   const { id } = useParams();
@@ -27,13 +59,36 @@ export default function RoutineEdit() {
   const [headersText, setHeadersText] = useState('{"User-Agent":"OpsPulse"}');
   const [isActive, setIsActive] = useState(true);
 
+  const [initialSnapshot, setInitialSnapshot] = useState<string>("");
+  const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+
   const parsedHeaders = useMemo(() => {
     try {
-      return JSON.parse(headersText || "{}");
+      const raw = headersText?.trim() || "{}";
+      const parsed = JSON.parse(raw);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+      // força valores string (mais seguro pro backend)
+      return Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, String(v)]));
     } catch {
       return null;
     }
   }, [headersText]);
+
+  const dirty = useMemo(() => {
+    const current = JSON.stringify(
+      {
+        name: name.trim(),
+        endpoint_url: endpointUrl.trim(),
+        interval_minutes: intervalMinutes.trim(),
+        http_method: httpMethod,
+        headers_text: headersText,
+        is_active: isActive,
+      },
+      null,
+      0
+    );
+    return initialSnapshot !== "" && current !== initialSnapshot;
+  }, [name, endpointUrl, intervalMinutes, httpMethod, headersText, isActive, initialSnapshot]);
 
   async function load() {
     setLoading(true);
@@ -48,6 +103,20 @@ export default function RoutineEdit() {
       setHttpMethod((routine.http_method ?? "GET") as "GET" | "POST");
       setHeadersText(JSON.stringify(routine.headers_json ?? {}, null, 2));
       setIsActive(!!routine.is_active);
+
+      const snap = JSON.stringify(
+        {
+          name: (routine.name ?? "").trim(),
+          endpoint_url: (routine.endpoint_url ?? "").trim(),
+          interval_minutes: String(routine.interval_minutes ?? 5).trim(),
+          http_method: (routine.http_method ?? "GET") as "GET" | "POST",
+          headers_text: JSON.stringify(routine.headers_json ?? {}, null, 2),
+          is_active: !!routine.is_active,
+        },
+        null,
+        0
+      );
+      setInitialSnapshot(snap);
     } catch (e: any) {
       setError(e.message ?? String(e));
     } finally {
@@ -58,9 +127,12 @@ export default function RoutineEdit() {
   async function save() {
     setError(null);
 
-    // validações simples antes de chamar o backend
-    if (!name.trim()) return setError("Nome é obrigatório.");
-    if (!endpointUrl.trim()) return setError("Endpoint URL é obrigatório.");
+    const trimmedName = name.trim();
+    const trimmedUrl = endpointUrl.trim();
+
+    if (!trimmedName) return setError("Nome é obrigatório.");
+    if (!trimmedUrl) return setError("Endpoint URL é obrigatório.");
+    if (!isValidUrl(trimmedUrl)) return setError("Informe uma URL válida.");
 
     const n = Number(intervalMinutes);
     if (!Number.isFinite(n) || n < 5) return setError("Intervalo deve ser um número (mínimo 5).");
@@ -72,8 +144,8 @@ export default function RoutineEdit() {
       await apiFetch(`/routines/${id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          name: name.trim(),
-          endpoint_url: endpointUrl.trim(),
+          name: trimmedName,
+          endpoint_url: trimmedUrl,
           interval_minutes: n,
           http_method: httpMethod,
           headers_json: parsedHeaders,
@@ -81,7 +153,6 @@ export default function RoutineEdit() {
         }),
       });
 
-      // volta pro detalhe (pra você ver o resultado)
       nav(`/routines/${id}`, { replace: true });
     } catch (e: any) {
       setError(e.message ?? String(e));
@@ -90,101 +161,161 @@ export default function RoutineEdit() {
     }
   }
 
+  function onCancel() {
+    if (dirty) setConfirmCancelOpen(true);
+    else nav(`/routines/${id}`);
+  }
+
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   return (
-    <div style={{ maxWidth: 900, margin: "40px auto", padding: 20 }}>
-      <div style={{ marginBottom: 12 }}>
-        <Link to={`/routines/${id}`}>← Voltar</Link>
+    <div className="space-y-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="mb-2">
+            <Link
+              to={`/routines/${id}`}
+              className="text-sm text-muted-foreground underline underline-offset-4"
+            >
+              ← Voltar
+            </Link>
+          </div>
+
+          <h1 className="text-2xl font-semibold tracking-tight">Editar rotina</h1>
+          <p className="text-sm text-muted-foreground">
+            MVP: rotina HTTP com <span className="font-medium">interval_minutes</span> (sem cron).
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {dirty && <Badge variant="secondary">alterações não salvas</Badge>}
+          <Button variant="outline" onClick={load} disabled={loading || saving}>
+            {loading ? "Carregando..." : "Recarregar"}
+          </Button>
+        </div>
       </div>
 
-      <h1>Editar rotina</h1>
-      <p style={{ marginTop: 6 }}>MVP: rotina HTTP com interval_minutes (sem cron).</p>
-
       {error && (
-        <p style={{ marginTop: 12 }}>
-          <b>Erro:</b> {error}
-        </p>
+        <Alert variant="destructive">
+          <AlertTitle>Erro</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
 
-      {loading ? (
-        <p>Carregando...</p>
-      ) : (
-        <div style={{ border: "1px solid #ddd", padding: 12, marginTop: 12 }}>
-          <div style={{ marginBottom: 10 }}>
-            <label><b>Nome</b></label>
-            <input
-              style={{ width: "100%" }}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Configurações</CardTitle>
+        </CardHeader>
+
+        <CardContent className="space-y-4">
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">Nome</label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} />
           </div>
 
-          <div style={{ marginBottom: 10 }}>
-            <label><b>Endpoint URL</b></label>
-            <input
-              style={{ width: "100%" }}
-              value={endpointUrl}
-              onChange={(e) => setEndpointUrl(e.target.value)}
-            />
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">Endpoint URL</label>
+            <Input value={endpointUrl} onChange={(e) => setEndpointUrl(e.target.value)} />
+            <p className="text-xs text-muted-foreground">
+              Dica: use uma URL completa (com https://).
+            </p>
           </div>
 
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 240 }}>
-              <label><b>Intervalo (min)</b></label>
-              <input
-                style={{ width: "100%" }}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">Intervalo (min)</label>
+              <Input
+                inputMode="numeric"
                 value={intervalMinutes}
                 onChange={(e) => setIntervalMinutes(e.target.value)}
+                placeholder="5"
               />
-              <small>Regra do banco: mínimo 5.</small>
+              <p className="text-xs text-muted-foreground">Regra do banco: mínimo 5.</p>
             </div>
 
-            <div style={{ flex: 1, minWidth: 240 }}>
-              <label><b>Método</b></label>
-              <select
-                style={{ width: "100%" }}
-                value={httpMethod}
-                onChange={(e) => setHttpMethod(e.target.value as "GET" | "POST")}
-              >
-                <option value="GET">GET</option>
-                <option value="POST">POST</option>
-              </select>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">Método</label>
+              <Select value={httpMethod} onValueChange={(v) => setHttpMethod(v as "GET" | "POST")}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="GET">GET</SelectItem>
+                  <SelectItem value="POST">POST</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
-          <div style={{ marginTop: 10 }}>
-            <label><b>Headers (JSON)</b></label>
-            <textarea
-              style={{ width: "100%", minHeight: 140, fontFamily: "monospace" }}
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <label className="text-sm font-medium">Headers (JSON)</label>
+              {parsedHeaders === null ? (
+                <Badge variant="destructive">JSON inválido</Badge>
+              ) : (
+                <Badge variant="secondary">ok</Badge>
+              )}
+            </div>
+
+            <Textarea
               value={headersText}
               onChange={(e) => setHeadersText(e.target.value)}
+              className="min-h-[160px] font-mono text-xs"
             />
-            <small>Dica: mantenha simples. O backend bloqueia Authorization/Cookie/X-API-Key.</small>
+
+            <p className="text-xs text-muted-foreground">
+              Dica: mantenha simples. O backend bloqueia Authorization/Cookie/X-API-Key.
+            </p>
           </div>
 
-          <div style={{ marginTop: 10 }}>
-            <label>
-              <input
-                type="checkbox"
-                checked={isActive}
-                onChange={(e) => setIsActive(e.target.checked)}
-              />{" "}
-              <b>Ativa</b>
-            </label>
+          <div className="flex items-center justify-between rounded-md border p-3">
+            <div className="space-y-0.5">
+              <div className="text-sm font-medium">Ativa</div>
+              <div className="text-xs text-muted-foreground">
+                Se desativar, o scheduler ignora essa rotina.
+              </div>
+            </div>
+            <Switch checked={isActive} onCheckedChange={setIsActive} />
           </div>
 
-          <div style={{ marginTop: 12, display: "flex", gap: 10 }}>
-            <button onClick={save} disabled={saving}>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={save} disabled={saving || loading}>
               {saving ? "Salvando..." : "Salvar"}
-            </button>
-            <button onClick={() => nav(`/routines/${id}`)}>Cancelar</button>
+            </Button>
+            <Button variant="outline" onClick={onCancel} disabled={saving}>
+              Cancelar
+            </Button>
           </div>
-        </div>
-      )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={confirmCancelOpen} onOpenChange={setConfirmCancelOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Descartar alterações?</DialogTitle>
+            <DialogDescription>
+              Você tem mudanças não salvas. Se sair agora, você vai perder essas alterações.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setConfirmCancelOpen(false)}>
+              Voltar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setConfirmCancelOpen(false);
+                nav(`/routines/${id}`);
+              }}
+            >
+              Descartar e sair
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

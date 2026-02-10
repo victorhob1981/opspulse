@@ -1,6 +1,29 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
+
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader as UiDialogHeader,
+  DialogTitle as UiDialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 function isValidUrl(url: string) {
   try {
@@ -11,18 +34,45 @@ function isValidUrl(url: string) {
   }
 }
 
+type HttpMethod = "GET" | "POST";
+
 export default function CreateRoutine() {
   const nav = useNavigate();
 
   const [name, setName] = useState("Nova rotina");
   const [endpointUrl, setEndpointUrl] = useState("https://httpbin.org/status/200");
-  const [intervalMinutes, setIntervalMinutes] = useState(5);
-  const [httpMethod, setHttpMethod] = useState<"GET" | "POST">("GET");
+  const [intervalMinutes, setIntervalMinutes] = useState<number>(5);
+  const [httpMethod, setHttpMethod] = useState<HttpMethod>("GET");
   const [isActive, setIsActive] = useState(true);
   const [headersText, setHeadersText] = useState('{"User-Agent":"OpsPulse"}');
 
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+
+  const intervalOk = useMemo(() => Number.isFinite(intervalMinutes) && intervalMinutes >= 5, [intervalMinutes]);
+  const urlOk = useMemo(() => {
+    const u = endpointUrl.trim();
+    return !!u && isValidUrl(u);
+  }, [endpointUrl]);
+
+  function parseHeadersOrError(): { ok: true; value: Record<string, string> } | { ok: false; error: string } {
+    let headersJson: Record<string, string> = {};
+    const ht = headersText.trim();
+
+    if (!ht) return { ok: true, value: headersJson };
+
+    try {
+      const parsed = JSON.parse(ht);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return { ok: false, error: 'headers_json precisa ser um JSON objeto. Ex: {"User-Agent":"OpsPulse"}' };
+      }
+
+      headersJson = Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, String(v)]));
+      return { ok: true, value: headersJson };
+    } catch {
+      return { ok: false, error: 'headers_json inválido. Use um JSON objeto. Ex: {"User-Agent":"OpsPulse"}' };
+    }
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -44,36 +94,20 @@ export default function CreateRoutine() {
       return;
     }
 
-    let headersJson: Record<string, string> = {};
-    const ht = headersText.trim();
-
-    if (ht) {
-      try {
-        const parsed = JSON.parse(ht);
-        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-          setMsg("headers_json precisa ser um JSON objeto. Ex: {\"User-Agent\":\"OpsPulse\"}");
-          return;
-        }
-
-        // força valores string (mais seguro pro backend)
-        headersJson = Object.fromEntries(
-          Object.entries(parsed).map(([k, v]) => [k, String(v)])
-        );
-      } catch {
-        setMsg("headers_json inválido. Use um JSON objeto. Ex: {\"User-Agent\":\"OpsPulse\"}");
-        return;
-      }
+    const headersParsed = parseHeadersOrError();
+    if (!headersParsed.ok) {
+      setMsg(headersParsed.error);
+      return;
     }
 
     // Observação: o backend já bloqueia Authorization/Cookie/X-API-Key.
-    // Aqui só montamos um payload limpo.
     const payload = {
       name: trimmedName,
       kind: "HTTP_CHECK",
       interval_minutes: intervalMinutes,
       endpoint_url: trimmedUrl,
       http_method: httpMethod,
-      headers_json: headersJson,
+      headers_json: headersParsed.value,
       is_active: isActive,
       auth_mode: "NONE",
       secret_ref: null,
@@ -90,11 +124,8 @@ export default function CreateRoutine() {
       const id = created?.id ?? res?.id;
 
       setMsg("Rotina criada! Redirecionando...");
-      if (id) {
-        nav(`/routines/${id}`, { replace: true });
-      } else {
-        nav("/", { replace: true });
-      }
+      if (id) nav(`/routines/${id}`, { replace: true });
+      else nav("/", { replace: true });
     } catch (e: any) {
       setMsg(e.message ?? String(e));
     } finally {
@@ -103,84 +134,150 @@ export default function CreateRoutine() {
   }
 
   return (
-    <div style={{ maxWidth: 900, margin: "40px auto", padding: 20 }}>
-      <div style={{ marginBottom: 12 }}>
-        <Link to="/">← Voltar</Link>
+    <div className="space-y-6">
+      {/* Cabeçalho */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Criar rotina</h1>
+          <p className="text-sm text-muted-foreground">
+            MVP: Rotina HTTP com <span className="font-medium">interval_minutes</span> (sem cron).
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => nav(-1)}>
+            ← Voltar
+          </Button>
+
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="outline">Cancelar</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <UiDialogHeader>
+                <UiDialogTitle>Cancelar criação?</UiDialogTitle>
+                <DialogDescription>
+                  Você vai perder as alterações deste formulário.
+                </DialogDescription>
+              </UiDialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { /* fecha pelo overlay */ }}>
+                  Continuar editando
+                </Button>
+                <Button
+                  onClick={() => nav("/", { replace: true })}
+                >
+                  Sair sem salvar
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Button onClick={() => (document.getElementById("create-routine-submit") as HTMLButtonElement | null)?.click()} disabled={saving}>
+            {saving ? "Salvando..." : "Criar"}
+          </Button>
+        </div>
       </div>
 
-      <h1>Criar rotina</h1>
-      <p style={{ marginTop: 6 }}>
-        MVP: Rotina HTTP com interval_minutes (sem cron).
-      </p>
+      {/* Mensagens */}
+      {msg && (
+        <Card className={msg.toLowerCase().includes("criada") ? "border-emerald-200" : "border-destructive/40"}>
+          <CardHeader>
+            <CardTitle className="text-base">{msg.toLowerCase().includes("criada") ? "Sucesso" : "Erro"}</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm">
+            <span className="font-medium">Detalhe:</span> {msg}
+          </CardContent>
+        </Card>
+      )}
 
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: 12, marginTop: 16 }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          <b>Nome</b>
-          <input value={name} onChange={(e) => setName(e.target.value)} />
-        </label>
+      {/* Form */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Detalhes</CardTitle>
+          <div className="flex items-center gap-2">
+            {!urlOk && <Badge variant="secondary">URL inválida</Badge>}
+            {!intervalOk && <Badge variant="secondary">Intervalo &lt; 5</Badge>}
+            {saving && <Badge variant="secondary">salvando…</Badge>}
+          </div>
+        </CardHeader>
 
-        <label style={{ display: "grid", gap: 6 }}>
-          <b>Endpoint URL</b>
-          <input value={endpointUrl} onChange={(e) => setEndpointUrl(e.target.value)} />
-        </label>
+        <CardContent>
+          <form onSubmit={onSubmit} className="grid gap-5">
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">Nome</label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex.: Healthcheck do site" />
+            </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <label style={{ display: "grid", gap: 6 }}>
-            <b>Intervalo (min)</b>
-            <input
-              type="number"
-              min={5}
-              value={intervalMinutes}
-              onChange={(e) => setIntervalMinutes(Number(e.target.value))}
-            />
-            <small>Regra do banco: mínimo 5.</small>
-          </label>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">Endpoint URL</label>
+              <Input
+                value={endpointUrl}
+                onChange={(e) => setEndpointUrl(e.target.value)}
+                placeholder="https://..."
+              />
+              <p className="text-xs text-muted-foreground">
+                Dica: use endpoints de teste como <span className="font-medium">httpbin</span> pra validar.
+              </p>
+            </div>
 
-          <label style={{ display: "grid", gap: 6 }}>
-            <b>Método</b>
-            <select value={httpMethod} onChange={(e) => setHttpMethod(e.target.value as any)}>
-              <option value="GET">GET</option>
-              <option value="POST">POST</option>
-            </select>
-          </label>
-        </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-2">
+                <label className="text-sm font-medium">Intervalo (min)</label>
+                <Input
+                  type="number"
+                  min={5}
+                  value={Number.isFinite(intervalMinutes) ? String(intervalMinutes) : ""}
+                  onChange={(e) => setIntervalMinutes(Number(e.target.value))}
+                />
+                <p className="text-xs text-muted-foreground">Regra do banco: mínimo 5.</p>
+              </div>
 
-        <label style={{ display: "grid", gap: 6 }}>
-          <b>Headers (JSON)</b>
-          <textarea
-            rows={5}
-            value={headersText}
-            onChange={(e) => setHeadersText(e.target.value)}
-          />
-          <small>
-            Dica: mantenha simples. O backend bloqueia Authorization/Cookie/X-API-Key.
-          </small>
-        </label>
+              <div className="grid gap-2">
+                <label className="text-sm font-medium">Método</label>
+                <Select value={httpMethod} onValueChange={(v) => setHttpMethod(v as HttpMethod)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="GET">GET</SelectItem>
+                    <SelectItem value="POST">POST</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
 
-        <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            type="checkbox"
-            checked={isActive}
-            onChange={(e) => setIsActive(e.target.checked)}
-          />
-          <b>Ativa</b>
-        </label>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">Headers (JSON)</label>
+              <Textarea
+                rows={6}
+                value={headersText}
+                onChange={(e) => setHeadersText(e.target.value)}
+                placeholder='{"User-Agent":"OpsPulse"}'
+              />
+              <p className="text-xs text-muted-foreground">
+                Mantenha simples. O backend bloqueia <span className="font-medium">Authorization</span>,{" "}
+                <span className="font-medium">Cookie</span> e <span className="font-medium">X-API-Key</span>.
+              </p>
+            </div>
 
-        <div style={{ display: "flex", gap: 10 }}>
-          <button type="submit" disabled={saving}>
-            {saving ? "Salvando..." : "Criar"}
-          </button>
-          <button type="button" onClick={() => nav("/", { replace: true })}>
-            Cancelar
-          </button>
-        </div>
+            <div className="flex items-center gap-2">
+              <Checkbox checked={isActive} onCheckedChange={(v) => setIsActive(Boolean(v))} />
+              <span className="text-sm font-medium">Ativa</span>
+            </div>
 
-        {msg && (
-          <p style={{ marginTop: 6 }}>
-            <b>Info:</b> {msg}
-          </p>
-        )}
-      </form>
+            {/* Botões do form (mantém submit real) */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button id="create-routine-submit" type="submit" disabled={saving}>
+                {saving ? "Salvando..." : "Criar"}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => nav(-1)}>
+                Voltar
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }

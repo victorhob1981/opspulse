@@ -3,6 +3,29 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { dueLabel, formatDateTime, formatDuration, relativeTime } from "../lib/format";
 
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Separator } from "@/components/ui/separator";
+
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
 type Routine = {
   id: string;
   name: string;
@@ -25,26 +48,10 @@ type Run = {
   created_at: string;
 };
 
-function Pill({ text, tone }: { text: string; tone?: "good" | "bad" | "neutral" }) {
-  const style: React.CSSProperties = {
-    fontSize: 12,
-    padding: "4px 8px",
-    borderRadius: 999,
-    border: "1px solid #ddd",
-    whiteSpace: "nowrap",
-  };
-
-  if (tone === "good") style.background = "#eaffea";
-  if (tone === "bad") style.background = "#ffecec";
-  if (tone === "neutral") style.background = "#f6f6f6";
-
-  return <span style={style}>{text}</span>;
-}
-
-function runTone(status: string) {
-  if (status === "SUCCESS") return "good";
-  if (status === "FAIL") return "bad";
-  return "neutral";
+function statusBadgeVariant(status: string): "default" | "destructive" | "secondary" {
+  if (status === "SUCCESS") return "default";
+  if (status === "FAIL") return "destructive";
+  return "secondary";
 }
 
 export default function RoutineDetail() {
@@ -59,6 +66,10 @@ export default function RoutineDetail() {
   const [running, setRunning] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Dialog states
+  const [openToggle, setOpenToggle] = useState(false);
+  const [openDelete, setOpenDelete] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -89,14 +100,10 @@ export default function RoutineDetail() {
     }
   }
 
-  async function toggleActive() {
+  async function toggleActiveConfirmed() {
     if (!routine) return;
 
     const next = !routine.is_active;
-    const label = next ? "ATIVAR" : "PAUSAR";
-
-    const ok = window.confirm(`Confirmar ${label} a rotina "${routine.name}"?`);
-    if (!ok) return;
 
     setToggling(true);
     setError(null);
@@ -105,6 +112,7 @@ export default function RoutineDetail() {
         method: "PATCH",
         body: JSON.stringify({ is_active: next }),
       });
+      setOpenToggle(false);
       await load();
     } catch (e: any) {
       setError(e.message ?? String(e));
@@ -113,18 +121,14 @@ export default function RoutineDetail() {
     }
   }
 
-  async function deleteRoutine() {
+  async function deleteRoutineConfirmed() {
     if (!routine) return;
-
-    const ok = window.confirm(
-      `Excluir a rotina "${routine.name}"?\n\nIsso NÃO pode ser desfeito.`
-    );
-    if (!ok) return;
 
     setDeleting(true);
     setError(null);
     try {
       await apiFetch(`/routines/${routine.id}`, { method: "DELETE" });
+      setOpenDelete(false);
       nav("/", { replace: true });
     } catch (e: any) {
       setError(e.message ?? String(e));
@@ -135,103 +139,326 @@ export default function RoutineDetail() {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  const toggleLabel = routine?.is_active ? "Pausar" : "Ativar";
+  const toggleTitle = routine?.is_active ? "Pausar rotina" : "Ativar rotina";
+  const toggleDesc = routine
+    ? routine.is_active
+      ? `Tem certeza que deseja PAUSAR a rotina "${routine.name}"?`
+      : `Tem certeza que deseja ATIVAR a rotina "${routine.name}"?`
+    : "";
+
   return (
-    <div style={{ maxWidth: 900, margin: "40px auto", padding: 20 }}>
-      <div style={{ marginBottom: 12 }}>
-        <Link to="/">← Voltar</Link>
+    <div className="space-y-6">
+      <div>
+        <Link to="/" className="text-sm text-muted-foreground hover:text-foreground">
+          ← Voltar
+        </Link>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>Detalhe da rotina</h1>
-        {loading ? <Pill text="carregando..." tone="neutral" /> : null}
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-tight">Detalhe da rotina</h1>
+
+          {routine ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{routine.id}</Badge>
+              <Badge variant={routine.is_active ? "default" : "secondary"}>
+                {routine.is_active ? "Ativa" : "Pausada"}
+              </Badge>
+              {loading ? <Badge variant="secondary">carregando…</Badge> : null}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={load} disabled={loading}>
+            {loading ? "Carregando..." : "Recarregar"}
+          </Button>
+        </div>
       </div>
 
       {error && (
-        <p style={{ marginTop: 12 }}>
-          <b>Erro:</b> {error}
-        </p>
+        <Card className="border-destructive/40">
+          <CardHeader>
+            <CardTitle className="text-base">Erro</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm">
+            <span className="font-medium">Detalhe:</span> {error}
+          </CardContent>
+        </Card>
       )}
 
       {!routine ? (
-        <p>Carregando...</p>
+        <Card>
+          <CardHeader>
+            <CardTitle>Carregando...</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-muted-foreground">
+            Buscando os detalhes da rotina.
+          </CardContent>
+        </Card>
       ) : (
         <>
-          <div style={{ border: "1px solid #ddd", padding: 12, marginTop: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-              <b>{routine.name}</b>
-              <Pill text={routine.is_active ? "Ativa" : "Pausada"} tone="neutral" />
-            </div>
+          {/* Top card com infos + ações */}
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-4">
+              <div className="min-w-0">
+                <CardTitle className="truncate">{routine.name}</CardTitle>
+                <p className="mt-1 truncate text-sm text-muted-foreground">
+                  {routine.endpoint_url}
+                </p>
+              </div>
 
-            <div style={{ fontSize: 14, marginTop: 10, display: "grid", gap: 4 }}>
-              <div><b>URL:</b> {routine.endpoint_url}</div>
-              <div><b>Intervalo:</b> {routine.interval_minutes} min</div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Button onClick={runNow} disabled={running}>
+                  {running ? "Rodando..." : "Rodar agora"}
+                </Button>
 
+                <Button
+                  variant="outline"
+                  onClick={() => nav(`/routines/${routine.id}/edit`)}
+                >
+                  Editar
+                </Button>
+
+                <Button variant="outline" onClick={() => setOpenToggle(true)} disabled={toggling}>
+                  {toggling ? "Aplicando..." : toggleLabel}
+                </Button>
+
+                <Button variant="destructive" onClick={() => setOpenDelete(true)} disabled={deleting}>
+                  {deleting ? "Excluindo..." : "Excluir"}
+                </Button>
+              </div>
+            </CardHeader>
+
+            <CardContent className="grid gap-2 text-sm">
               <div>
-                <b>Última:</b> {formatDateTime(routine.last_run_at)}{" "}
-                {routine.last_run_at ? <span>({relativeTime(routine.last_run_at)})</span> : null}
+                <span className="font-medium">Intervalo:</span>{" "}
+                {routine.interval_minutes} min
               </div>
 
               <div>
-                <b>Próxima:</b> {formatDateTime(routine.next_run_at)}{" "}
-                <span>({dueLabel(routine.next_run_at)})</span>
+                <span className="font-medium">Última:</span>{" "}
+                {formatDateTime(routine.last_run_at)}{" "}
+                {routine.last_run_at ? (
+                  <span className="text-muted-foreground">
+                    ({relativeTime(routine.last_run_at)})
+                  </span>
+                ) : null}
               </div>
-            </div>
 
-            <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button onClick={load} disabled={loading}>
-                {loading ? "Carregando..." : "Recarregar"}
-              </button>
+              <div>
+                <span className="font-medium">Próxima:</span>{" "}
+                {formatDateTime(routine.next_run_at)}{" "}
+                <span className="text-muted-foreground">
+                  ({dueLabel(routine.next_run_at)})
+                </span>
+              </div>
+            </CardContent>
+          </Card>
 
-              <button onClick={runNow} disabled={running}>
-                {running ? "Rodando..." : "Rodar agora"}
-              </button>
+          {/* Tabs */}
+          <Tabs defaultValue="runs">
+            <TabsList>
+              <TabsTrigger value="overview">Visão geral</TabsTrigger>
+              <TabsTrigger value="runs">Execuções</TabsTrigger>
+              <TabsTrigger value="config">Config</TabsTrigger>
+            </TabsList>
 
-              <button onClick={() => nav(`/routines/${routine.id}/edit`)}>
-                Editar
-              </button>
+            <TabsContent value="overview" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Resumo</CardTitle>
+                </CardHeader>
+                <CardContent className="text-sm text-muted-foreground">
+                  Aqui dá pra colocar no futuro: “taxa de sucesso”, “última falha”, etc.
+                </CardContent>
+              </Card>
+            </TabsContent>
 
-              <button onClick={toggleActive} disabled={toggling}>
-                {toggling ? "Aplicando..." : routine.is_active ? "Pausar" : "Ativar"}
-              </button>
+            <TabsContent value="runs" className="space-y-4">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <CardTitle>Histórico (runs)</CardTitle>
 
-              <button onClick={deleteRoutine} disabled={deleting}>
-                {deleting ? "Excluindo..." : "Excluir"}
-              </button>
-            </div>
-          </div>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" onClick={load} disabled={loading}>
+                      {loading ? "Atualizando..." : "Atualizar"}
+                    </Button>
+                    {runs.length ? (
+                      <Badge variant="secondary">{runs.length} registros</Badge>
+                    ) : null}
+                  </div>
+                </CardHeader>
 
-          <h2 style={{ marginTop: 24 }}>Histórico (runs)</h2>
+                <CardContent className="space-y-4">
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Trigger</TableHead>
+                          <TableHead>HTTP</TableHead>
+                          <TableHead>Duração</TableHead>
+                          <TableHead>Quando</TableHead>
+                        </TableRow>
+                      </TableHeader>
 
-          <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-            {runs.map((run) => (
-              <div key={run.id} style={{ border: "1px solid #eee", padding: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                    <Pill text={`${run.status}`} tone={runTone(run.status) as any} />
-                    <Pill text={`${run.triggered_by}`} tone="neutral" />
-                    {run.http_status ? <Pill text={`HTTP ${run.http_status}`} tone="neutral" /> : null}
+                      <TableBody>
+                        {runs.map((run) => (
+                          <TableRow key={run.id}>
+                            <TableCell>
+                              <Badge variant={statusBadgeVariant(run.status)}>
+                                {run.status}
+                              </Badge>
+                            </TableCell>
+
+                            <TableCell>
+                              <Badge variant="secondary">{run.triggered_by}</Badge>
+                            </TableCell>
+
+                            <TableCell className="font-mono text-xs">
+                              {run.http_status ? `HTTP ${run.http_status}` : "—"}
+                            </TableCell>
+
+                            <TableCell>{formatDuration(run.duration_ms)}</TableCell>
+
+                            <TableCell className="text-muted-foreground">
+                              {formatDateTime(run.created_at)}{" "}
+                              <span>({relativeTime(run.created_at)})</span>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+
+                        {!loading && runs.length === 0 && (
+                          <TableRow>
+                            <TableCell colSpan={5} className="text-sm text-muted-foreground">
+                              Nenhum run ainda.
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
                   </div>
 
-                  <span style={{ fontSize: 12, opacity: 0.75 }}>
-                    {formatDateTime(run.created_at)} ({relativeTime(run.created_at)})
-                  </span>
-                </div>
+                  <Separator />
 
-                <div style={{ fontSize: 14, marginTop: 8, display: "grid", gap: 4 }}>
-                  <div><b>Duração:</b> {formatDuration(run.duration_ms)}</div>
-                  <div><b>Início:</b> {formatDateTime(run.started_at)}</div>
-                  <div><b>Fim:</b> {formatDateTime(run.finished_at)}</div>
-                  {run.error_message && (
-                    <div><b>Erro:</b> {run.error_message}</div>
-                  )}
-                </div>
-              </div>
-            ))}
+                  <div className="space-y-3">
+                    <div className="text-sm font-medium">Detalhes</div>
 
-            {!loading && runs.length === 0 && <p>Nenhum run ainda.</p>}
-          </div>
+                    <div className="grid gap-3">
+                      {runs.slice(0, 10).map((run) => (
+                        <Card key={run.id} className="border-muted">
+                          <CardContent className="p-4">
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant={statusBadgeVariant(run.status)}>{run.status}</Badge>
+                                <Badge variant="secondary">{run.triggered_by}</Badge>
+                                {run.http_status ? (
+                                  <Badge variant="outline">HTTP {run.http_status}</Badge>
+                                ) : null}
+                                <Badge variant="outline">{formatDuration(run.duration_ms)}</Badge>
+                              </div>
+
+                              <div className="text-xs text-muted-foreground">
+                                {formatDateTime(run.created_at)} ({relativeTime(run.created_at)})
+                              </div>
+                            </div>
+
+                            <div className="mt-3 grid gap-1 text-sm text-muted-foreground">
+                              <div>
+                                <span className="font-medium text-foreground">Início:</span>{" "}
+                                {formatDateTime(run.started_at)}
+                              </div>
+                              <div>
+                                <span className="font-medium text-foreground">Fim:</span>{" "}
+                                {formatDateTime(run.finished_at)}
+                              </div>
+
+                              {run.error_message ? (
+                                <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-foreground">
+                                  <div className="font-medium">Erro</div>
+                                  <div className="mt-1 text-sm">{run.error_message}</div>
+                                </div>
+                              ) : null}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="config" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Configuração</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm text-muted-foreground">
+                  <div>
+                    <span className="font-medium text-foreground">URL:</span>{" "}
+                    {routine.endpoint_url}
+                  </div>
+                  <div>
+                    <span className="font-medium text-foreground">Intervalo:</span>{" "}
+                    {routine.interval_minutes} min
+                  </div>
+                  <div>
+                    <span className="font-medium text-foreground">Ativa:</span>{" "}
+                    {routine.is_active ? "sim" : "não"}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+
+          {/* Dialog: Toggle */}
+          <Dialog open={openToggle} onOpenChange={setOpenToggle}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{toggleTitle}</DialogTitle>
+                <DialogDescription>{toggleDesc}</DialogDescription>
+              </DialogHeader>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setOpenToggle(false)} disabled={toggling}>
+                  Cancelar
+                </Button>
+                <Button onClick={toggleActiveConfirmed} disabled={toggling}>
+                  {toggling ? "Aplicando..." : toggleLabel}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Dialog: Delete */}
+          <Dialog open={openDelete} onOpenChange={setOpenDelete}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Excluir rotina</DialogTitle>
+                <DialogDescription>
+                  Tem certeza que deseja excluir a rotina "{routine.name}"?
+                  <br />
+                  <b>Isso NÃO pode ser desfeito.</b>
+                </DialogDescription>
+              </DialogHeader>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setOpenDelete(false)} disabled={deleting}>
+                  Cancelar
+                </Button>
+                <Button variant="destructive" onClick={deleteRoutineConfirmed} disabled={deleting}>
+                  {deleting ? "Excluindo..." : "Excluir"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </div>

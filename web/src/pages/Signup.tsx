@@ -2,6 +2,11 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+
 export default function Signup() {
   const nav = useNavigate();
 
@@ -16,14 +21,16 @@ export default function Signup() {
     e.preventDefault();
     setMsg(null);
 
-    if (!email.trim()) return setMsg("Preencha o email.");
+    const trimmedEmail = email.trim();
+
+    if (!trimmedEmail) return setMsg("Preencha o email.");
     if (password.length < 6) return setMsg("Senha precisa ter pelo menos 6 caracteres.");
     if (password !== confirm) return setMsg("As senhas não conferem.");
 
     setLoading(true);
 
     const { data, error } = await supabase.auth.signUp({
-      email,
+      email: trimmedEmail,
       password,
       // Se você configurar redirect URL no Supabase, pode usar:
       // options: { emailRedirectTo: `${window.location.origin}/login` }
@@ -48,42 +55,79 @@ export default function Signup() {
     setLoading(false);
   }
 
+  const okMsg = msg?.toLowerCase().includes("conta criada");
+
   return (
-    <div style={{ maxWidth: 420, margin: "60px auto", padding: 20 }}>
-      <h1>OpsPulse</h1>
-      <p>Criar conta</p>
+    <div className="min-h-[calc(100vh-1px)] bg-background">
+      <div className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-14">
+        <div className="text-center">
+          <h1 className="text-3xl font-semibold tracking-tight">OpsPulse</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Crie sua conta</p>
+        </div>
 
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: 10 }}>
-        <input
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          autoComplete="email"
-        />
-        <input
-          placeholder="Senha"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoComplete="new-password"
-        />
-        <input
-          placeholder="Confirmar senha"
-          type="password"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          autoComplete="new-password"
-        />
-        <button type="submit" disabled={loading}>
-          {loading ? "Criando..." : "Criar conta"}
-        </button>
-      </form>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Criar conta</CardTitle>
+          </CardHeader>
 
-      {msg && <p style={{ marginTop: 12 }}>{msg}</p>}
+          <CardContent>
+            <form onSubmit={onSubmit} className="grid gap-3">
+              <div className="grid gap-2">
+                <label className="text-sm font-medium">Email</label>
+                <Input
+                  placeholder="seuemail@exemplo.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
+                />
+              </div>
 
-      <p style={{ marginTop: 12 }}>
-        Já tem conta? <Link to="/login">Entrar</Link>
-      </p>
+              <div className="grid gap-2">
+                <label className="text-sm font-medium">Senha</label>
+                <Input
+                  placeholder="••••••••"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="new-password"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Mínimo de 6 caracteres.
+                </p>
+              </div>
+
+              <div className="grid gap-2">
+                <label className="text-sm font-medium">Confirmar senha</label>
+                <Input
+                  placeholder="••••••••"
+                  type="password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </div>
+
+              <Button type="submit" disabled={loading}>
+                {loading ? "Criando..." : "Criar conta"}
+              </Button>
+
+              <p className="text-sm text-muted-foreground">
+                Já tem conta?{" "}
+                <Link to="/login" className="font-medium text-foreground underline underline-offset-4">
+                  Entrar
+                </Link>
+              </p>
+            </form>
+          </CardContent>
+        </Card>
+
+        {msg && (
+          <Alert variant={okMsg ? "default" : "destructive"}>
+            <AlertTitle>{okMsg ? "Ok" : "Erro"}</AlertTitle>
+            <AlertDescription>{msg}</AlertDescription>
+          </Alert>
+        )}
+      </div>
     </div>
   );
 }
