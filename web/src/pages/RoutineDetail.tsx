@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { dueLabel, formatDateTime, formatDuration, relativeTime } from "../lib/format";
@@ -142,6 +142,66 @@ export default function RoutineDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // ====== STATS / OVERVIEW ======
+  const stats = useMemo(() => {
+    const sorted = [...runs].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+
+    const total = sorted.length;
+    const successes = sorted.filter((r) => r.status === "SUCCESS").length;
+    const fails = sorted.filter((r) => r.status === "FAIL").length;
+
+    const successRate = total ? Math.round((successes / total) * 100) : 0;
+
+    const lastRun = sorted[0] ?? null;
+    const lastFailure = sorted.find((r) => r.status === "FAIL") ?? null;
+
+    const durations = sorted
+      .map((r) => r.duration_ms)
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+
+    const avgDuration =
+      durations.length ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : null;
+
+    const maxDuration =
+      durations.length ? Math.max(...durations) : null;
+
+    const now = Date.now();
+    const since24h = now - 24 * 60 * 60 * 1000;
+
+    const runs24h = sorted.filter((r) => new Date(r.created_at).getTime() >= since24h);
+    const total24h = runs24h.length;
+    const success24h = runs24h.filter((r) => r.status === "SUCCESS").length;
+    const successRate24h = total24h ? Math.round((success24h / total24h) * 100) : 0;
+
+    const manualCount = sorted.filter((r) => r.triggered_by === "MANUAL").length;
+    const scheduleCount = sorted.filter((r) => r.triggered_by === "SCHEDULE").length;
+
+    // streak: quantos SUCCESS seguidos (a partir do mais recente)
+    let successStreak = 0;
+    for (const r of sorted) {
+      if (r.status === "SUCCESS") successStreak++;
+      else break;
+    }
+
+    return {
+      total,
+      successes,
+      fails,
+      successRate,
+      lastRun,
+      lastFailure,
+      avgDuration,
+      maxDuration,
+      total24h,
+      successRate24h,
+      manualCount,
+      scheduleCount,
+      successStreak,
+    };
+  }, [runs]);
+
   const toggleLabel = routine?.is_active ? "Pausar" : "Ativar";
   const toggleTitle = routine?.is_active ? "Pausar rotina" : "Ativar rotina";
   const toggleDesc = routine
@@ -269,17 +329,140 @@ export default function RoutineDetail() {
               <TabsTrigger value="config">Config</TabsTrigger>
             </TabsList>
 
+            {/* ====== OVERVIEW ====== */}
             <TabsContent value="overview" className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Card>
+                  <CardHeader className="py-4">
+                    <CardTitle className="text-sm font-medium">Taxa de sucesso</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-2xl font-semibold">
+                    {stats.total ? `${stats.successRate}%` : "—"}
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {stats.successes}/{stats.total} execuções
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="py-4">
+                    <CardTitle className="text-sm font-medium">Última execução</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-1">
+                    {stats.lastRun ? (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={statusBadgeVariant(stats.lastRun.status)}>
+                            {stats.lastRun.status}
+                          </Badge>
+                          <Badge variant="secondary">{stats.lastRun.triggered_by}</Badge>
+                          {stats.lastRun.http_status ? (
+                            <Badge variant="outline">HTTP {stats.lastRun.http_status}</Badge>
+                          ) : null}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatDateTime(stats.lastRun.created_at)} ({relativeTime(stats.lastRun.created_at)})
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-sm text-muted-foreground">Sem execuções ainda.</div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="py-4">
+                    <CardTitle className="text-sm font-medium">Última falha</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    {stats.lastFailure ? (
+                      <>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="destructive">FAIL</Badge>
+                          {stats.lastFailure.http_status ? (
+                            <Badge variant="outline">HTTP {stats.lastFailure.http_status}</Badge>
+                          ) : null}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatDateTime(stats.lastFailure.created_at)} ({relativeTime(stats.lastFailure.created_at)})
+                        </div>
+                        {stats.lastFailure.error_message ? (
+                          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs">
+                            {stats.lastFailure.error_message}
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <div className="text-sm text-muted-foreground">Nenhuma falha registrada 🎉</div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="py-4">
+                    <CardTitle className="text-sm font-medium">Performance</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-1">
+                    <div className="text-sm">
+                      <span className="font-medium">Média:</span>{" "}
+                      {stats.avgDuration != null ? formatDuration(stats.avgDuration) : "—"}
+                    </div>
+                    <div className="text-sm">
+                      <span className="font-medium">Pior:</span>{" "}
+                      {stats.maxDuration != null ? formatDuration(stats.maxDuration) : "—"}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Streak: {stats.successStreak} sucesso(s) seguidos
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
               <Card>
                 <CardHeader>
-                  <CardTitle>Resumo</CardTitle>
+                  <CardTitle>Últimas 24h</CardTitle>
+                </CardHeader>
+                <CardContent className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-3">
+                  <div>
+                    <span className="font-medium text-foreground">Execuções:</span> {stats.total24h}
+                  </div>
+                  <div>
+                    <span className="font-medium text-foreground">Sucesso:</span>{" "}
+                    {stats.total24h ? `${stats.successRate24h}%` : "—"}
+                  </div>
+                  <div>
+                    <span className="font-medium text-foreground">Triggers:</span>{" "}
+                    {stats.scheduleCount} schedule • {stats.manualCount} manual
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Próxima execução</CardTitle>
                 </CardHeader>
                 <CardContent className="text-sm text-muted-foreground">
-                  Aqui dá pra colocar no futuro: “taxa de sucesso”, “última falha”, etc.
+                  {routine ? (
+                    <>
+                      <div>
+                        <span className="font-medium text-foreground">Quando:</span>{" "}
+                        {formatDateTime(routine.next_run_at)} ({dueLabel(routine.next_run_at)})
+                      </div>
+                      <div className="mt-1">
+                        <span className="font-medium text-foreground">Intervalo:</span>{" "}
+                        {routine.interval_minutes} min •{" "}
+                        <span className="font-medium text-foreground">Ativa:</span>{" "}
+                        {routine.is_active ? "sim" : "não"}
+                      </div>
+                    </>
+                  ) : (
+                    "—"
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
 
+            {/* ====== RUNS ====== */}
             <TabsContent value="runs" className="space-y-4">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
@@ -395,6 +578,7 @@ export default function RoutineDetail() {
               </Card>
             </TabsContent>
 
+            {/* ====== CONFIG ====== */}
             <TabsContent value="config" className="space-y-4">
               <Card>
                 <CardHeader>
