@@ -82,7 +82,8 @@ def _execute_http_routine(routine: dict) -> dict:
     Executa uma rotina do tipo HTTP_CHECK.
     Retorna sempre um dict com status/tempo/erro (não lança exception por HTTP != 2xx).
     """
-    timeout_s = float(os.environ.get("ROUTINE_TIMEOUT_SECONDS", "8"))
+    timeout_s = float(os.getenv("HTTP_TIMEOUT_SECONDS") or os.getenv("ROUTINE_TIMEOUT_SECONDS") or "8")
+
     started = _now_iso()
     t0 = time.time()
 
@@ -476,7 +477,7 @@ def _run_one_scheduled(routine: dict, locked_by: str) -> dict:
             local_admin.insert_run(
                 {
                     "routine_id": routine["id"],
-                    "triggered_by": "SCHEDULED",
+                    "triggered_by": "SCHEDULE",
                     "status": "FAIL",
                     "http_status": None,
                     "duration_ms": 0,
@@ -505,7 +506,7 @@ def _run_one_scheduled(routine: dict, locked_by: str) -> dict:
             pass
 
 
-@app.schedule(schedule="0 */4 * * * *", arg_name="mytimer", run_on_startup=True, use_monitor=True)
+@app.schedule(schedule="0 */5 * * * *", arg_name="mytimer", run_on_startup=True, use_monitor=True)
 def scheduler(mytimer: func.TimerRequest) -> None:
     now_iso = _now_iso()
     lease_seconds = int(os.environ.get("LOCK_LEASE_SECONDS", "45"))

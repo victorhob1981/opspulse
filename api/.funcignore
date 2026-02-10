@@ -1,3 +1,16 @@
+# secrets / local
+local.settings.json
+*.env
+.env*
+__pycache__/
+*.pyc
 
+# local dev
+.venv/
+.python_packages/
+.azurite/
+.vscode/
+tests/
 
-.venv
+# misc
+*.log

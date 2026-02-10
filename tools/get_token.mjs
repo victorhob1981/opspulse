@@ -11,8 +11,7 @@ if (!url || !anon || !email || !password) {
 }
 
 const supabase = createClient(url, anon, { auth: { persistSession: false } })
-const { data, error } = await supabase.auth.signInWithPassword({ email, password }) // :contentReference[oaicite:4]{index=4}
-
+const { data, error } = await supabase.auth.signInWithPassword({ email, password })
 if (error) {
   console.error(error)
   process.exit(1)

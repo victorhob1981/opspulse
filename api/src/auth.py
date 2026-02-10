@@ -7,7 +7,7 @@ def get_user_id_from_request(auth_header: str | None) -> str | None:
     Espera: Authorization: Bearer <access_token do Supabase>
     Faz uma chamada ao /auth/v1/user para validar e obter o user.id.
 
-    Obs: precisa enviar 'apikey' junto (igual o supabase-js faz). :contentReference[oaicite:2]{index=2}
+    Obs: precisa enviar 'apikey' junto (igual o supabase-js faz).
     """
     if not auth_header or not auth_header.lower().startswith("bearer "):
         return None
