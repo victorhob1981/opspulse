@@ -7,6 +7,7 @@ import RoutineDetail from "./pages/RoutineDetail";
 import CreateRoutine from "./pages/CreateRoutine";
 import { supabase } from "./lib/supabase";
 import RoutineEdit from "./pages/RoutineEdit";
+import Signup from "./pages/Signup";
 
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -80,6 +81,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 
 
         <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="/signup" element={<Signup />} />
+
+
       </Routes>
     </BrowserRouter>
   </React.StrictMode>

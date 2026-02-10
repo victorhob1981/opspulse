@@ -69,6 +69,10 @@ export default function Login() {
           {loading ? "Entrando..." : "Entrar"}
         </button>
       </form>
+        <p style={{ marginTop: 12 }}>
+          Não tem conta? <a href="/signup">Criar conta</a>
+        </p>
+
 
       {msg && <p style={{ marginTop: 12 }}>{msg}</p>}
     </div>
