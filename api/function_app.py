@@ -77,6 +77,56 @@ def _get_secret_value(secret_ref: str | None) -> str | None:
     return os.environ.get(env_name)
 
 
+def _iso_to_dt(value: str | None) -> datetime | None:
+    """
+    Parse defensivo pra ISO.
+    - Aceita strings com 'Z' (converte pra '+00:00')
+    - Retorna datetime timezone-aware quando possível
+    """
+    if not value:
+        return None
+    v = value.strip()
+    if v.endswith("Z"):
+        v = v[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(v)
+    except Exception:
+        return None
+
+
+def _to_minute(dt: datetime) -> datetime:
+    """Trunca datetime pra minuto cheio (segundos/micros = 0)."""
+    return dt.replace(second=0, microsecond=0)
+
+
+def _compute_next_run_scheduled(routine: dict, now_dt: datetime) -> str:
+    """
+    Calcula o próximo next_run_at para execução SCHEDULE sem drift.
+
+    Regras:
+    - Âncora no slot devido (routine.next_run_at) em vez de finished_at.
+      Isso evita perder o tick do Timer Trigger (0 */5 * * * *) por poucos segundos.
+    - Se estiver atrasado (next_run ainda no passado), pula intervalos até cair no futuro.
+    - Sempre salva truncado no minuto (segundos/micros = 0).
+    """
+    interval = int(routine.get("interval_minutes") or 5)
+
+    anchor_dt = _iso_to_dt(routine.get("next_run_at"))
+    if anchor_dt is None:
+        anchor_dt = now_dt
+
+    if anchor_dt.tzinfo is None:
+        anchor_dt = anchor_dt.replace(tzinfo=timezone.utc)
+
+    next_dt = anchor_dt + timedelta(minutes=interval)
+
+    while next_dt <= now_dt:
+        next_dt = next_dt + timedelta(minutes=interval)
+
+    next_dt = _to_minute(next_dt)
+    return next_dt.isoformat()
+
+
 def _execute_http_routine(routine: dict) -> dict:
     """
     Executa uma rotina do tipo HTTP_CHECK.
@@ -92,7 +142,6 @@ def _execute_http_routine(routine: dict) -> dict:
         url = routine.get("endpoint_url") or ""
         headers = routine.get("headers_json") or {}
 
-        # Auth por secret_ref (NÃO salva token no banco)
         auth_mode = routine.get("auth_mode") or "NONE"
         if auth_mode == "SECRET_REF":
             token = _get_secret_value(routine.get("secret_ref"))
@@ -106,11 +155,9 @@ def _execute_http_routine(routine: dict) -> dict:
                     "started_at": started,
                     "finished_at": finished,
                 }
-            # padrão simples: Bearer token
             headers = dict(headers)
             headers["Authorization"] = f"Bearer {token}"
 
-        # request
         r = httpx.request(method, url, headers=headers, timeout=timeout_s)
 
         finished = _now_iso()
@@ -127,7 +174,6 @@ def _execute_http_routine(routine: dict) -> dict:
                 "finished_at": finished,
             }
 
-        # Falha HTTP: guarda só um resumo curto (sem payload sensível)
         return {
             "status": "FAIL",
             "http_status": r.status_code,
@@ -193,7 +239,7 @@ def create_routine(req: func.HttpRequest) -> func.HttpResponse:
         workspace_id = admin.get_or_create_workspace_id(user_id)
 
         now = datetime.now(timezone.utc)
-        next_run = now + timedelta(minutes=data.interval_minutes)
+        next_run = _to_minute(now + timedelta(minutes=data.interval_minutes))
 
         payload = {
             "workspace_id": workspace_id,
@@ -286,18 +332,15 @@ def patch_routine(req: func.HttpRequest) -> func.HttpResponse:
         if "endpoint_url" in changes:
             changes["endpoint_url"] = str(changes["endpoint_url"])
 
-
-
         if "headers_json" in changes:
             validate_headers(changes["headers_json"])
 
         if changes.get("auth_mode") == "SECRET_REF" and not changes.get("secret_ref"):
             return _json(400, {"error": {"code": "BAD_REQUEST", "message": "secret_ref is required when auth_mode=SECRET_REF"}})
 
-        # Se mudar intervalo, recalcula next_run_at (simples e OK pro MVP)
         if "interval_minutes" in changes:
             next_run = datetime.now(timezone.utc) + timedelta(minutes=int(changes["interval_minutes"]))
-            changes["next_run_at"] = next_run.isoformat()
+            changes["next_run_at"] = _to_minute(next_run).isoformat()
 
         changes["updated_at"] = _now_iso()
 
@@ -377,7 +420,6 @@ def run_routine(req: func.HttpRequest) -> func.HttpResponse:
 
         created_run = admin.insert_run(run_payload)
 
-        # best-effort: atualizar last_run_at
         try:
             admin.touch_last_run(workspace_id, routine_id, result["finished_at"])
         except Exception:
@@ -434,15 +476,12 @@ def _run_one_scheduled(routine: dict, locked_by: str) -> dict:
     finished_at = None
 
     try:
-        # executa (não levanta exception em falha HTTP; retorna FAIL)
         result = _execute_http_routine(routine)
         finished_at = result.get("finished_at") or _now_iso()
 
-        # calcula next_run_at (MVP simples: finished + interval)
-        finished_dt = datetime.fromisoformat(finished_at)
-        next_run = (finished_dt + timedelta(minutes=int(routine["interval_minutes"]))).isoformat()
+        now_dt = datetime.now(timezone.utc)
+        next_run = _compute_next_run_scheduled(routine, now_dt)
 
-        # grava run (best-effort)
         try:
             run_payload = {
                 "routine_id": routine["id"],
@@ -458,8 +497,6 @@ def _run_one_scheduled(routine: dict, locked_by: str) -> dict:
         except Exception as e:
             print(f"[scheduler] insert_run failed routine={routine['id']} err={_truncate(str(e), 200)}")
 
-
-        # finaliza e solta lock (isso é o principal)
         local_admin.finish_scheduled_run(
             workspace_id=routine["workspace_id"],
             routine_id=routine["id"],
@@ -471,7 +508,6 @@ def _run_one_scheduled(routine: dict, locked_by: str) -> dict:
         return {"id": routine["id"], "status": result["status"], "http_status": result["http_status"]}
 
     except Exception as e:
-        # tenta registrar FAIL (best-effort)
         try:
             now_iso = _now_iso()
             local_admin.insert_run(
@@ -489,12 +525,9 @@ def _run_one_scheduled(routine: dict, locked_by: str) -> dict:
         except Exception:
             pass
 
-        # re-raise pra aparecer no log do worker
         raise
 
     finally:
-        # fallback: se por algum motivo o finish falhou, tenta liberar lock aqui.
-        # (Só funciona se você implementou SupabaseAdmin.release_lock)
         try:
             if hasattr(local_admin, "release_lock"):
                 local_admin.release_lock(
@@ -508,7 +541,11 @@ def _run_one_scheduled(routine: dict, locked_by: str) -> dict:
 
 @app.schedule(schedule="0 */5 * * * *", arg_name="mytimer", run_on_startup=True, use_monitor=True)
 def scheduler(mytimer: func.TimerRequest) -> None:
-    now_iso = _now_iso()
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.replace(microsecond=0).isoformat()
+
+    due_slack_seconds = int(os.environ.get("DUE_SLACK_SECONDS", "3"))
+    due_iso = (now_dt + timedelta(seconds=due_slack_seconds)).replace(microsecond=0).isoformat()
     lease_seconds = int(os.environ.get("LOCK_LEASE_SECONDS", "45"))
     batch_limit = int(os.environ.get("SCHEDULER_BATCH_LIMIT", "20"))
     max_concurrency = int(os.environ.get("MAX_CONCURRENCY", "5"))
@@ -518,9 +555,9 @@ def scheduler(mytimer: func.TimerRequest) -> None:
     admin = SupabaseAdmin()
 
     try:
-        candidates = admin.list_due_routines(now_iso, limit=batch_limit)
+        candidates = admin.list_due_routines(due_iso, limit=batch_limit)
         if not candidates:
-            print(f"[scheduler] no due routines at {now_iso}")
+            print(f"[scheduler] no due routines at now={now_iso} due_cutoff={due_iso}")
             return
 
         locked = []
@@ -536,7 +573,7 @@ def scheduler(mytimer: func.TimerRequest) -> None:
                 locked.append(got)
 
         if not locked:
-            print(f"[scheduler] candidates found but none locked (lock active / race) at {now_iso}")
+            print(f"[scheduler] candidates found but none locked (lock active / race) at now={now_iso} due_cutoff={due_iso}")
             return
 
         print(f"[scheduler] locked {len(locked)} routines (batch_limit={batch_limit}, max_concurrency={max_concurrency})")

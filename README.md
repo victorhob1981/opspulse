@@ -1,33 +1,237 @@
 # OpsPulse
 
-OpsPulse é um mini SaaS de portfólio para cadastrar, agendar e monitorar rotinas (health checks e chamadas HTTP),
-com histórico de execuções e, no MVP 2, um resumo inteligente com LLM quando houver falha.
+Um mini SaaS de **agendamento + execução + histórico** de rotinas HTTP — pensado como projeto de portfólio para demonstrar, na prática, competências de **back-end**, **dados/SQL**, **automação/scheduler**, **cloud/deploy** e **integrações**
 
-## Objetivo
-Projeto de aprendizado e portfólio com foco em arquitetura, cloud e boas práticas, rodando com custo mínimo (free tiers).
+## Demo
 
-## Stack
-- Backend: Azure Functions (Python)
-- Banco/Auth: Supabase (PostgreSQL + Auth)
-- Frontend: Azure Static Web Apps ou Vercel
+- **App (Vercel):** https://opspulse-self.vercel.app/
+**Demo account**
+- Email: demo@opspulse.app
+- Senha: opspulse
 
-## MVP 1 (entregável)
-- Auth (Supabase)
-- CRUD routines com interval_minutes
-- Execução manual
-- Histórico de runs
-- Timer Function executa pendentes
-- /health + logs
-- Controles: max_concurrency=5, timeout 5–10s, retry=1 + backoff
-- Segurança: bloquear headers sensíveis; secrets via App Settings
+> **Objetivo do projeto:** resolver um problema real de operação — ter um lugar simples para **agendar, executar e acompanhar rotinas HTTP** (pings, webhooks e checagens), com histórico e visibilidade do que deu certo/errado.  
+>  
+> Ao mesmo tempo, o OpsPulse serve como um “laboratório prático” para eu **aplicar na prática os conceitos da trilha AZ-900**, principalmente:
+> - computação em nuvem e modelo de responsabilidade compartilhada
+> - serviços gerenciados e configuração por variáveis de ambiente
+> - observabilidade por logs e rastreabilidade de execuções
+> - autenticação/autorização em aplicações modernas
+> - deploy e separação clara entre front-end e back-end
+>  
+> A prioridade do projeto é ser **simples, funcional e barato de manter**, usando free tiers sempre que possível.
 
-## MVP 2 (brilho)
-- RLS (Supabase policies)
-- Run Summary com LLM (contexto mínimo sanitizado)
-- Retry/backoff melhor (429/503)
-- Webhook/events (opcional)
+---
 
-## Estrutura
-- /api  -> backend (Azure Functions)
-- /web  -> frontend
-- /docs -> diagramas e evidências
+## O que é o OpsPulse
+
+Pense nele como um **“cron + monitor + histórico”** minimalista.
+
+Você consegue:
+- Criar conta e logar (**Supabase Auth**)
+- Cadastrar rotinas HTTP (URL + método + headers seguros)
+- Definir frequência por `interval_minutes` (MVP sem cron string)
+- Rodar manualmente (teste rápido)
+- Rodar automaticamente (scheduler via **Azure Timer Trigger**)
+- Ver histórico de execuções (status, HTTP status, duração, timestamps)
+- Ver “saúde” do backend via `/health`
+
+---
+
+## Stack (baixo custo, alto valor de currículo)
+
+**Back-end**
+- Azure Functions (Python)
+- Endpoints REST
+- Timer Trigger como scheduler
+- Configuração via App Settings (env vars)
+- Logs como fonte de verdade de produção
+
+**Banco + Auth**
+- Supabase (PostgreSQL + Auth)
+- Front autentica direto no Supabase
+- Backend valida o usuário com token do Supabase
+- Banco “de verdade”: constraints, índices e consistência
+
+**Front-end**
+- React + Vite + TypeScript
+- Tailwind + shadcn/ui (UI moderna, tema claro)
+- Deploy no Vercel
+- SPA routing configurado (regras de rewrite)
+
+---
+
+## Conceitos e decisões importantes (o que esse projeto prova)
+
+### 1) Scheduler robusto (sem virar monstro)
+- Agendamento por `interval_minutes` (>= 5) no MVP
+- Busca rotinas “devidas” por `next_run_at`
+- Proteção de concorrência com lock (`lock_until`, `locked_by`)
+- `MAX_CONCURRENCY` para limitar execuções em paralelo
+- Timeout controlado na execução HTTP
+
+### 2) Drift e “perda de tick” resolvidos
+O scheduler roda a cada 5 minutos (Timer Trigger). Na prática, o trigger pode acordar alguns segundos “antes do minuto cravado”. Para não perder o slot:
+- query considera um pequeno slack (`DUE_SLACK_SECONDS`, default 3s)
+- cálculo do próximo `next_run_at` é ancorado no slot devido, evitando drift
+- timestamps padronizados com truncagem para minuto (segundos/micros = 0)
+
+### 3) Segurança básica de produção
+- Segredos **não** vão para o banco
+- `auth_mode = NONE | SECRET_REF`
+- `secret_ref` aponta para env var no backend (Azure App Settings)
+- Backend bloqueia headers sensíveis em `headers_json` (ex.: `Authorization`, `Cookie`, `X-API-Key`)
+- Backend usa `SERVICE_ROLE` apenas no servidor (nunca no front)
+
+### 4) “Vida real” de engenharia
+O projeto registra e incorpora problemas reais que surgem no caminho:
+- deploy separado (Vercel vs Azure)
+- SPA rewrite (refresh em rota)
+- diferenças de tipos/serialização (Pydantic/URL)
+- variáveis de ambiente e tokens (CRLF, etc.)
+- consistência de enums/constraints no banco
+
+---
+
+## Modelo de dados (resumo)
+
+Tabelas:
+- `workspaces`: `id`, `owner_id`, `name`, `created_at`
+- `routines`: `workspace_id`, `name`, `kind`, `interval_minutes`, `next_run_at`, `last_run_at`, `is_active`,
+  `endpoint_url`, `http_method`, `headers_json`, `auth_mode`, `secret_ref`, `lock_until`, `locked_by`, `created_at`, `updated_at`
+- `routine_runs`: `routine_id`, `triggered_by (MANUAL|SCHEDULE)`, `status (SUCCESS|FAIL)`, `http_status`, `duration_ms`,
+  `error_message`, `started_at`, `finished_at`, `created_at`
+  - campos futuros previstos: `ai_summary`, `ai_confidence`
+
+Índices principais (foco scheduler e histórico):
+- `idx_routines_scheduler (is_active, next_run_at)`
+- `idx_runs_routine_created (routine_id, created_at desc)`
+
+Mais detalhes: `docs/DB_OVERVIEW.md`
+
+---
+
+## Estrutura do repositório
+
+- `api/` → Azure Functions (Python)
+- `web/` → React + Vite + TS
+- `docs/` → documentação técnica (DB, decisões, etc.)
+- `tools/` → scripts utilitários (ex.: token/automação local)
+
+---
+
+## Rodando localmente
+
+### Pré-requisitos
+- Node 18+ (recomendado 20+)
+- pnpm
+- Python 3.11+ (ou 3.10+)
+- Azure Functions Core Tools v4
+
+---
+
+### 1) Configurar Supabase
+Crie um projeto no Supabase e obtenha:
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+Crie as tabelas conforme `docs/DB_OVERVIEW.md` (ou via SQL equivalente).
+
+---
+
+### 2) API (Azure Functions)
+
+Dentro de `api/`, crie `local.settings.json`:
+
+```json
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+
+    "SUPABASE_URL": "https://xxxx.supabase.co",
+    "SUPABASE_ANON_KEY": "xxxxx",
+    "SUPABASE_SERVICE_ROLE_KEY": "xxxxx",
+
+    "HTTP_TIMEOUT_SECONDS": "8",
+    "MAX_CONCURRENCY": "5",
+    "LOCK_LEASE_SECONDS": "45",
+    "SCHEDULER_BATCH_LIMIT": "20",
+    "DUE_SLACK_SECONDS": "3"
+  }
+}
+```
+
+Instalar deps e rodar:
+
+```bash
+cd api
+python -m venv .venv
+# ativar venv
+pip install -r requirements.txt
+func start
+```
+
+Endpoints principais:
+- `GET /api/health`
+- `POST /api/routines`
+- `GET /api/routines`
+- `GET /api/routines/{id}`
+- `PATCH /api/routines/{id}`
+- `DELETE /api/routines/{id}`
+- `POST /api/routines/{id}/run`
+- `GET /api/routines/{id}/runs`
+
+---
+
+### 3) WEB (Vite + React)
+
+Dentro de `web/`, crie `.env.local`:
+
+```bash
+VITE_SUPABASE_URL=https://xxxx.supabase.co
+VITE_SUPABASE_ANON_KEY=xxxxx
+VITE_API_BASE_URL=http://localhost:7071/api
+```
+
+Rodar:
+
+```bash
+cd web
+pnpm install
+pnpm dev
+```
+
+---
+
+## Deploy (produção)
+
+### API (Azure Functions)
+- configurar App Settings com as mesmas env vars do `local.settings.json` (sem commitar secrets)
+- `SUPABASE_SERVICE_ROLE_KEY` fica somente no backend
+
+### Web (Vercel)
+- setar `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_BASE_URL`
+- manter `vercel.json` com rewrite para SPA routing
+
+---
+
+## Custos (visão rápida)
+- Supabase: free tier (DB + Auth)
+- Vercel: free tier para front
+- Azure Functions: free grant/consumo 
+
+---
+
+## Roadmap (ideias futuras)
+- Cron string (opcional) + timezone handling
+- RLS no Supabase (polimento de segurança real)
+- Página de observabilidade (filtros, agregações, alertas)
+- Integrações (webhook, Slack/Email) para falhas
+- “AI Run Summary” para falhas (enviando contexto mínimo sanitizado)
+
+---
+
+## Licença
+MIT (ver `LICENSE`)

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { apiFetch } from "../lib/api";
 import { dueLabel, formatDateTime, relativeTime } from "../lib/format";
+import { useAutoRefresh } from "../lib/autoRefresh";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -35,11 +36,10 @@ export default function Dashboard() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Dialog state (toggle)
   const [toggleOpen, setToggleOpen] = useState(false);
   const [toggleTarget, setToggleTarget] = useState<Routine | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -53,7 +53,15 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useAutoRefresh(load, {
+    enabled: true,
+    intervalMs: 15000,
+    refreshOnFocus: true,
+    refreshOnVisible: true,
+    runOnMount: true,
+  });
 
   function askToggle(r: Routine) {
     setToggleTarget(r);
@@ -83,10 +91,6 @@ export default function Dashboard() {
     }
   }
 
-  useEffect(() => {
-    load();
-  }, []);
-
   const toggleLabel = toggleTarget?.is_active ? "Pausar" : "Ativar";
   const toggleTitle = toggleTarget?.is_active ? "Pausar rotina" : "Ativar rotina";
   const toggleDesc = toggleTarget
@@ -97,7 +101,6 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Cabeçalho */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
@@ -218,7 +221,6 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      {/* Dialog: Toggle Ativar/Pausar */}
       <Dialog
         open={toggleOpen}
         onOpenChange={(open) => {

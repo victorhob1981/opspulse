@@ -1,11 +1,26 @@
+# -----------------------------
+# OS / Editor
+# -----------------------------
+.DS_Store
+Thumbs.db
+
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+
+# -----------------------------
+# .NET / Visual Studio (legado)
+# -----------------------------
 bin/
 **/bin/
 !Modules/**
-obj
-csx
-.vs
-edge
-Publish
+obj/
+**/obj/
+csx/
+.vs/
+edge/
+Publish/
 
 *.user
 *.suo
@@ -13,26 +28,45 @@ Publish
 *.Cache
 project.lock.json
 
-/packages
-/TestResults
+/packages/
+TestResults/
 
+# -----------------------------
+# App / Secrets / Local config
+# -----------------------------
 /tools/NuGet.exe
-/App_Data
-/secrets
-/data
+/App_Data/
+/secrets/
+/data/
 .secrets
+
+# Não versionar configs locais/sensíveis
 appsettings.json
 local.settings.json
+api/local.settings.json
 
-node_modules
-dist
+# Env files
+.env
+.env.*
+!.env.example
 
+# -----------------------------
+# Node / Frontend
+# -----------------------------
+node_modules/
+dist/
+build/
+.vite/
+*.log
+
+# -----------------------------
+# Python
+# -----------------------------
 # Local python packages
 .python_packages/
 
 # Python Environments
-.env
-.venv
+.venv/
 env/
 venv/
 ENV/
@@ -44,7 +78,18 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Azurite artifacts
-__blobstorage__
-__queuestorage__
+# -----------------------------
+# Azure Functions (build/tooling)
+# -----------------------------
+api/.python_packages/
+api/bin/
+api/obj/
+
+# -----------------------------
+# Azurite artifacts (local storage emulator)
+# -----------------------------
+.azurite/
+__blobstorage__/
+__queuestorage__/
+__tablestorage__/
 __azurite_db*__.json

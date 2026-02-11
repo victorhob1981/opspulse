@@ -1,9 +1,9 @@
-// src/pages/DashboardHome.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { apiFetch } from "../lib/api";
 import { dueLabel, formatDateTime, relativeTime } from "../lib/format";
+import { useAutoRefresh } from "../lib/autoRefresh";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +26,7 @@ export default function DashboardHome() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -40,11 +40,15 @@ export default function DashboardHome() {
     } finally {
       setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    load();
   }, []);
+
+  useAutoRefresh(load, {
+    enabled: true,
+    intervalMs: 15000,
+    refreshOnFocus: true,
+    refreshOnVisible: true,
+    runOnMount: true,
+  });
 
   const stats = useMemo(() => {
     const total = routines.length;
@@ -54,7 +58,6 @@ export default function DashboardHome() {
   }, [routines]);
 
   const nextUp = useMemo(() => {
-    // pega as próximas 5 por next_run_at
     return [...routines]
       .sort((a, b) => (a.next_run_at || "").localeCompare(b.next_run_at || ""))
       .slice(0, 5);
@@ -121,7 +124,9 @@ export default function DashboardHome() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Próximas rotinas</CardTitle>
-          <Button variant="outline" onClick={() => nav("/routines")}>Ver todas</Button>
+          <Button variant="outline" onClick={() => nav("/routines")}>
+            Ver todas
+          </Button>
         </CardHeader>
 
         <CardContent className="space-y-3">
@@ -144,8 +149,7 @@ export default function DashboardHome() {
                   </div>
                   <div>
                     <span className="font-medium text-foreground">Próxima:</span>{" "}
-                    {formatDateTime(r.next_run_at)}{" "}
-                    <span>({dueLabel(r.next_run_at)})</span>
+                    {formatDateTime(r.next_run_at)} <span>({dueLabel(r.next_run_at)})</span>
                   </div>
                   <div>
                     <span className="font-medium text-foreground">Última:</span>{" "}

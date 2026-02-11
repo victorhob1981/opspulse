@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch } from "../lib/api";
 import { dueLabel, formatDateTime, formatDuration, relativeTime } from "../lib/format";
+import { useAutoRefresh } from "../lib/autoRefresh";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -67,11 +68,11 @@ export default function RoutineDetail() {
   const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Dialog states
   const [openToggle, setOpenToggle] = useState(false);
   const [openDelete, setOpenDelete] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
+    if (!id) return;
     setLoading(true);
     setError(null);
     try {
@@ -85,9 +86,18 @@ export default function RoutineDetail() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [id]);
+
+  useAutoRefresh(load, {
+    enabled: !!id,
+    intervalMs: 15000,
+    refreshOnFocus: true,
+    refreshOnVisible: true,
+    runOnMount: true,
+  });
 
   async function runNow() {
+    if (!id) return;
     setRunning(true);
     setError(null);
     try {
@@ -137,12 +147,6 @@ export default function RoutineDetail() {
     }
   }
 
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
-
-  // ====== STATS / OVERVIEW ======
   const stats = useMemo(() => {
     const sorted = [...runs].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
@@ -164,8 +168,7 @@ export default function RoutineDetail() {
     const avgDuration =
       durations.length ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : null;
 
-    const maxDuration =
-      durations.length ? Math.max(...durations) : null;
+    const maxDuration = durations.length ? Math.max(...durations) : null;
 
     const now = Date.now();
     const since24h = now - 24 * 60 * 60 * 1000;
@@ -178,7 +181,6 @@ export default function RoutineDetail() {
     const manualCount = sorted.filter((r) => r.triggered_by === "MANUAL").length;
     const scheduleCount = sorted.filter((r) => r.triggered_by === "SCHEDULE").length;
 
-    // streak: quantos SUCCESS seguidos (a partir do mais recente)
     let successStreak = 0;
     for (const r of sorted) {
       if (r.status === "SUCCESS") successStreak++;
@@ -218,7 +220,6 @@ export default function RoutineDetail() {
         </Link>
       </div>
 
-      {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">Detalhe da rotina</h1>
@@ -263,7 +264,6 @@ export default function RoutineDetail() {
         </Card>
       ) : (
         <>
-          {/* Top card com infos + ações */}
           <Card>
             <CardHeader className="flex flex-row items-start justify-between gap-4">
               <div className="min-w-0">
@@ -321,7 +321,6 @@ export default function RoutineDetail() {
             </CardContent>
           </Card>
 
-          {/* Tabs */}
           <Tabs defaultValue="runs">
             <TabsList>
               <TabsTrigger value="overview">Visão geral</TabsTrigger>
@@ -329,7 +328,6 @@ export default function RoutineDetail() {
               <TabsTrigger value="config">Config</TabsTrigger>
             </TabsList>
 
-            {/* ====== OVERVIEW ====== */}
             <TabsContent value="overview" className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <Card>
@@ -462,7 +460,6 @@ export default function RoutineDetail() {
               </Card>
             </TabsContent>
 
-            {/* ====== RUNS ====== */}
             <TabsContent value="runs" className="space-y-4">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
@@ -578,7 +575,6 @@ export default function RoutineDetail() {
               </Card>
             </TabsContent>
 
-            {/* ====== CONFIG ====== */}
             <TabsContent value="config" className="space-y-4">
               <Card>
                 <CardHeader>
@@ -602,7 +598,6 @@ export default function RoutineDetail() {
             </TabsContent>
           </Tabs>
 
-          {/* Dialog: Toggle */}
           <Dialog open={openToggle} onOpenChange={setOpenToggle}>
             <DialogContent>
               <DialogHeader>
@@ -621,7 +616,6 @@ export default function RoutineDetail() {
             </DialogContent>
           </Dialog>
 
-          {/* Dialog: Delete */}
           <Dialog open={openDelete} onOpenChange={setOpenDelete}>
             <DialogContent>
               <DialogHeader>
