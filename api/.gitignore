@@ -4,10 +4,8 @@
 .DS_Store
 Thumbs.db
 
-.vscode/*
-!.vscode/extensions.json
-!.vscode/settings.json
-!.vscode/launch.json
+# VS Code (não versionar nada)
+.vscode/
 
 # -----------------------------
 # .NET / Visual Studio (legado)
@@ -62,10 +60,8 @@ build/
 # -----------------------------
 # Python
 # -----------------------------
-# Local python packages
 .python_packages/
 
-# Python Environments
 .venv/
 env/
 venv/
@@ -73,7 +69,6 @@ ENV/
 env.bak/
 venv.bak/
 
-# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
