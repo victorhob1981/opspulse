@@ -5,7 +5,6 @@ Um mini SaaS de **agendamento + execução + histórico** de rotinas HTTP — pe
 ## Demo
 
 - **App:** https://opspulse-self.vercel.app/
-- 
 **Demo account**
   
 - Email: demo@opspulse.app
