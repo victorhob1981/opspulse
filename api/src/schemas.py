@@ -15,8 +15,6 @@ class RoutineCreate(BaseModel):
     auth_mode: Literal["NONE", "SECRET_REF"] = "NONE"
     secret_ref: Optional[str] = None
 
-from typing import Optional
-
 class RoutineUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=80)
     interval_minutes: Optional[int] = Field(default=None, ge=5)

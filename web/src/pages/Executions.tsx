@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
+import { getErrorMessage } from "../lib/error";
 import { dueLabel, formatDateTime, formatDuration, relativeTime } from "../lib/format";
 import { useAutoRefresh } from "../lib/autoRefresh";
 
@@ -79,8 +80,8 @@ export default function Executions() {
         const rr = await apiFetch(`/routines/${selectedRoutineId}/runs?limit=50`);
         setRuns(rr?.runs ?? []);
       }
-    } catch (e: any) {
-      setError(e.message ?? String(e));
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -142,9 +143,10 @@ export default function Executions() {
             <select
               className="h-9 rounded-md border bg-background px-3 text-sm"
               value={selectedRoutineId}
-              onChange={(e) =>
-                setSelectedRoutineId((e.target.value as any) === "ALL" ? "ALL" : e.target.value)
-              }
+              onChange={(e) => {
+                const value = e.target.value;
+                setSelectedRoutineId(value === "ALL" ? "ALL" : value);
+              }}
             >
               <option value="ALL">Todas</option>
               {routines.map((r) => (

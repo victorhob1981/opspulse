@@ -2,12 +2,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { supabase } from "./lib/supabase";
 
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 
 import AppShell from "./components/layout/AppShell";
+import ProtectedRoute from "./components/routing/ProtectedRoute";
 
 import DashboardHome from "./pages/DashboardHome";
 import Routines from "./pages/Routines";
@@ -19,34 +19,6 @@ import CreateRoutine from "./pages/CreateRoutine";
 import RoutineEdit from "./pages/RoutineEdit";
 
 import "./index.css";
-
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const [loading, setLoading] = React.useState(true);
-  const [authed, setAuthed] = React.useState(false);
-
-  React.useEffect(() => {
-    let mounted = true;
-
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setAuthed(!!data.session);
-      setLoading(false);
-    });
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setAuthed(!!session);
-    });
-
-    return () => {
-      mounted = false;
-      sub.subscription.unsubscribe();
-    };
-  }, []);
-
-  if (loading) return <div style={{ padding: 20 }}>Carregando...</div>;
-  if (!authed) return <Navigate to="/login" replace />;
-  return <>{children}</>;
-}
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch } from "../lib/api";
+import { getErrorMessage } from "../lib/error";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,7 +32,7 @@ type Routine = {
   endpoint_url: string;
   interval_minutes: number;
   http_method: "GET" | "POST";
-  headers_json: Record<string, any>;
+  headers_json: Record<string, unknown>;
   is_active: boolean;
 };
 
@@ -117,8 +118,8 @@ export default function RoutineEdit() {
         0
       );
       setInitialSnapshot(snap);
-    } catch (e: any) {
-      setError(e.message ?? String(e));
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -154,8 +155,8 @@ export default function RoutineEdit() {
       });
 
       nav(`/routines/${id}`, { replace: true });
-    } catch (e: any) {
-      setError(e.message ?? String(e));
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
     } finally {
       setSaving(false);
     }

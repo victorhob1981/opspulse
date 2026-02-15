@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch } from "../lib/api";
+import { getErrorMessage } from "../lib/error";
 import { dueLabel, formatDateTime, formatDuration, relativeTime } from "../lib/format";
 import { useAutoRefresh } from "../lib/autoRefresh";
 
@@ -81,8 +82,8 @@ export default function RoutineDetail() {
 
       const rr = await apiFetch(`/routines/${id}/runs`);
       setRuns(rr?.runs ?? []);
-    } catch (e: any) {
-      setError(e.message ?? String(e));
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -103,8 +104,8 @@ export default function RoutineDetail() {
     try {
       await apiFetch(`/routines/${id}/run`, { method: "POST" });
       await load();
-    } catch (e: any) {
-      setError(e.message ?? String(e));
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
     } finally {
       setRunning(false);
     }
@@ -124,8 +125,8 @@ export default function RoutineDetail() {
       });
       setOpenToggle(false);
       await load();
-    } catch (e: any) {
-      setError(e.message ?? String(e));
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
     } finally {
       setToggling(false);
     }
@@ -140,8 +141,8 @@ export default function RoutineDetail() {
       await apiFetch(`/routines/${routine.id}`, { method: "DELETE" });
       setOpenDelete(false);
       nav("/", { replace: true });
-    } catch (e: any) {
-      setError(e.message ?? String(e));
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
     } finally {
       setDeleting(false);
     }

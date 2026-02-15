@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "../lib/api";
+import { getErrorMessage } from "../lib/error";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -126,8 +127,8 @@ export default function CreateRoutine() {
       setMsg("Rotina criada! Redirecionando...");
       if (id) nav(`/routines/${id}`, { replace: true });
       else nav("/", { replace: true });
-    } catch (e: any) {
-      setMsg(e.message ?? String(e));
+    } catch (e: unknown) {
+      setMsg(getErrorMessage(e));
     } finally {
       setSaving(false);
     }

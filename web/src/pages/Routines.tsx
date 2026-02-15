@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { apiFetch } from "../lib/api";
+import { getErrorMessage } from "../lib/error";
 import { dueLabel, formatDateTime, relativeTime } from "../lib/format";
 import { useAutoRefresh } from "../lib/autoRefresh";
 
@@ -48,8 +49,8 @@ export default function Dashboard() {
 
       const payload = await apiFetch("/routines");
       setRoutines(payload?.routines ?? []);
-    } catch (e: any) {
-      setError(e.message ?? String(e));
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -84,8 +85,8 @@ export default function Dashboard() {
       setToggleOpen(false);
       setToggleTarget(null);
       await load();
-    } catch (e: any) {
-      setError(e.message ?? String(e));
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
     } finally {
       setBusyId(null);
     }
