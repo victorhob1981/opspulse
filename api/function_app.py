@@ -206,7 +206,7 @@ def _execute_http_routine(routine: dict) -> dict:
 
 
 # -------------------------
-# HTTP endpoints
+# HTTPS Helpers
 # -------------------------
 @app.route(route="health", methods=["GET"])
 def health(req: func.HttpRequest) -> func.HttpResponse:

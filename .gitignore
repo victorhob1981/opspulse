@@ -4,8 +4,11 @@
 .DS_Store
 Thumbs.db
 
-# VS Code (não versionar nada)
-.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/tasks.json
 
 # -----------------------------
 # .NET / Visual Studio (legado)
@@ -88,3 +91,4 @@ __blobstorage__/
 __queuestorage__/
 __tablestorage__/
 __azurite_db*__.json
+
