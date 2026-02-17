@@ -26,6 +26,7 @@ class SupabaseAdmin:
 
         # timeout padrão (pode ajustar via env se quiser)
         self.timeout_s = float(os.environ.get("SUPABASE_TIMEOUT_SECONDS", "10"))
+        self.client = httpx.Client(timeout=self.timeout_s)
 
     def _req(
         self,
@@ -41,13 +42,12 @@ class SupabaseAdmin:
         if extra_headers:
             headers.update(extra_headers)  # ✅ mescla (não sobrescreve)
 
-        return httpx.request(
+        return self.client.request(
             method=method,
             url=url,
             headers=headers,
             params=params,
             json=json,
-            timeout=self.timeout_s,
         )
 
     # -------------------------
