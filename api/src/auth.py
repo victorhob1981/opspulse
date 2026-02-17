@@ -2,6 +2,10 @@ import os
 import httpx
 
 
+_AUTH_TIMEOUT_S = float(os.environ.get("AUTH_REQUEST_TIMEOUT_SECONDS", "10"))
+_AUTH_CLIENT = httpx.Client(timeout=_AUTH_TIMEOUT_S)
+
+
 def get_user_id_from_request(auth_header: str | None) -> str | None:
     """
     Espera: Authorization: Bearer <access_token do Supabase>
@@ -28,8 +32,7 @@ def get_user_id_from_request(auth_header: str | None) -> str | None:
         "Authorization": f"Bearer {token}",
     }
 
-    with httpx.Client(timeout=10.0) as client:
-        r = client.get(url, headers=headers)
+    r = _AUTH_CLIENT.get(url, headers=headers)
 
     if r.status_code == 200:
         return r.json().get("id")

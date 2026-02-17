@@ -52,9 +52,9 @@ def _ping_supabase() -> dict:
     headers = {"apikey": service_key, "Authorization": f"Bearer {service_key}"}
 
     try:
-        t0 = time.time()
+        t0 = time.monotonic()
         r = httpx.get(url, headers=headers, timeout=3.0)
-        elapsed_ms = int((time.time() - t0) * 1000)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
         return {
             "ok": r.status_code == 200,
             "status_code": r.status_code,
@@ -99,6 +99,23 @@ def _to_minute(dt: datetime) -> datetime:
     return dt.replace(second=0, microsecond=0)
 
 
+def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int | None = None) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+
+    if value < min_value:
+        return default
+    if max_value is not None and value > max_value:
+        return max_value
+    return value
+
+
 def _compute_next_run_scheduled(routine: dict, now_dt: datetime) -> str:
     """
     Calcula o próximo next_run_at para execução SCHEDULE sem drift.
@@ -135,7 +152,7 @@ def _execute_http_routine(routine: dict) -> dict:
     timeout_s = float(os.getenv("HTTP_TIMEOUT_SECONDS") or os.getenv("ROUTINE_TIMEOUT_SECONDS") or "8")
 
     started = _now_iso()
-    t0 = time.time()
+    t0 = time.monotonic()
 
     try:
         method = (routine.get("http_method") or "GET").upper()
@@ -150,7 +167,7 @@ def _execute_http_routine(routine: dict) -> dict:
                 return {
                     "status": "FAIL",
                     "http_status": None,
-                    "duration_ms": int((time.time() - t0) * 1000),
+                    "duration_ms": int((time.monotonic() - t0) * 1000),
                     "error_message": "missing_secret_ref_value",
                     "started_at": started,
                     "finished_at": finished,
@@ -161,7 +178,7 @@ def _execute_http_routine(routine: dict) -> dict:
         r = httpx.request(method, url, headers=headers, timeout=timeout_s)
 
         finished = _now_iso()
-        duration_ms = int((time.time() - t0) * 1000)
+        duration_ms = int((time.monotonic() - t0) * 1000)
 
         ok = 200 <= r.status_code < 300
         if ok:
@@ -188,7 +205,7 @@ def _execute_http_routine(routine: dict) -> dict:
         return {
             "status": "FAIL",
             "http_status": None,
-            "duration_ms": int((time.time() - t0) * 1000),
+            "duration_ms": int((time.monotonic() - t0) * 1000),
             "error_message": "timeout",
             "started_at": started,
             "finished_at": finished,
@@ -198,7 +215,7 @@ def _execute_http_routine(routine: dict) -> dict:
         return {
             "status": "FAIL",
             "http_status": None,
-            "duration_ms": int((time.time() - t0) * 1000),
+            "duration_ms": int((time.monotonic() - t0) * 1000),
             "error_message": _truncate(f"exception:{str(e)}", 180),
             "started_at": started,
             "finished_at": finished,
@@ -544,11 +561,11 @@ def scheduler(mytimer: func.TimerRequest) -> None:
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.replace(microsecond=0).isoformat()
 
-    due_slack_seconds = int(os.environ.get("DUE_SLACK_SECONDS", "3"))
+    due_slack_seconds = _env_int("DUE_SLACK_SECONDS", 3, min_value=0, max_value=60)
     due_iso = (now_dt + timedelta(seconds=due_slack_seconds)).replace(microsecond=0).isoformat()
-    lease_seconds = int(os.environ.get("LOCK_LEASE_SECONDS", "45"))
-    batch_limit = int(os.environ.get("SCHEDULER_BATCH_LIMIT", "20"))
-    max_concurrency = int(os.environ.get("MAX_CONCURRENCY", "5"))
+    lease_seconds = _env_int("LOCK_LEASE_SECONDS", 45, min_value=5, max_value=3600)
+    batch_limit = _env_int("SCHEDULER_BATCH_LIMIT", 20, min_value=1, max_value=200)
+    max_concurrency = _env_int("MAX_CONCURRENCY", 5, min_value=1, max_value=50)
 
     locked_by = os.environ.get("WEBSITE_INSTANCE_ID") or f"local-{uuid.uuid4().hex[:8]}"
 
